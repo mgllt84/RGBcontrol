@@ -56,7 +56,7 @@ constexpr UINT TRAY_PROFILE_FIRST = 4110;
 constexpr UINT TRAY_EXIT = 4199;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.9";
+constexpr wchar_t kAppVersion[] = L"0.16.11";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -214,6 +214,9 @@ struct DualSenseMeshVertex {
     float bx = 0;
     float by = 1;
     float bz = 0;
+    // Connected-surface identifier from the Collada topology. It lets the
+    // live renderer move a button cap without translating the shell around it.
+    std::uint32_t component = UINT32_MAX;
 };
 struct DualSenseMeshTriangle {
     std::uint32_t a = 0;
@@ -237,17 +240,40 @@ struct DualSenseTexture {
     bool loaded = false;
 };
 DualSenseMesh g_dualSenseMesh;
+std::array<std::uint32_t, 15> g_dualSenseControlComponents{};
+std::array<std::uint32_t, 4> g_dualSenseDpadComponents{};
+std::array<std::vector<std::uint32_t>, 15> g_dualSenseControlComponentGroups;
+std::array<std::vector<std::uint32_t>, 4> g_dualSenseDpadComponentGroups;
+std::set<std::uint32_t> g_dualSenseDynamicComponents;
+std::vector<DualSenseMeshTriangle> g_dualSenseDynamicTriangles;
 std::array<DualSenseTexture, 3> g_dualSenseTextures;
 std::array<DualSenseTexture, 3> g_dualSenseNormalTextures;
 std::array<DualSenseTexture, 3> g_dualSenseRoughnessTextures;
 std::array<DualSenseTexture, 3> g_dualSenseMetallicTextures;
 std::unique_ptr<Bitmap> g_dualSenseModelCache;
+std::unique_ptr<Bitmap> g_dualSenseControlCache;
+std::unique_ptr<Bitmap> g_dualSenseMovingControlCache;
 float g_dualSenseModelCacheYaw = 999.0f;
 float g_dualSenseModelCachePitch = 999.0f;
 int g_dualSenseModelCacheWidth = 0;
 int g_dualSenseModelCacheHeight = 0;
-std::uint64_t g_dualSenseModelCacheInputSignature = UINT64_MAX;
-bool g_dualSenseMeshOnly = false;
+std::vector<float> g_dualSenseModelDepthCache;
+float g_dualSenseControlCacheYaw = 999.0f;
+float g_dualSenseControlCachePitch = 999.0f;
+int g_dualSenseControlCacheWidth = 0;
+int g_dualSenseControlCacheHeight = 0;
+std::uint64_t g_dualSenseControlCacheInputSignature = UINT64_MAX;
+float g_dualSenseMovingControlCacheYaw = 999.0f;
+float g_dualSenseMovingControlCachePitch = 999.0f;
+int g_dualSenseMovingControlCacheWidth = 0;
+int g_dualSenseMovingControlCacheHeight = 0;
+std::uint64_t g_dualSenseMovingControlCacheInputSignature = UINT64_MAX;
+std::unique_ptr<Bitmap> g_gamepadPageCache;
+int g_gamepadPageCacheWidth = 0;
+int g_gamepadPageCacheHeight = 0;
+float g_gamepadPageCacheScroll = -1.0f;
+bool g_gamepadFastPaintRequested = false;
+ULONGLONG g_gamepadLastFullPaintAt = 0;
 float g_gamepadYaw = 0.0f;
 float g_gamepadPitch = 0.12f;
 int g_gamepadLastMouseX = 0;
@@ -576,6 +602,17 @@ bool loadDualSenseTexture(const fs::path& path, DualSenseTexture& texture) {
 
 bool loadDualSenseMesh(const fs::path& path) {
     g_dualSenseMesh = {};
+    g_dualSenseControlComponents.fill(UINT32_MAX);
+    g_dualSenseDpadComponents.fill(UINT32_MAX);
+    for (auto& components : g_dualSenseControlComponentGroups) components.clear();
+    for (auto& components : g_dualSenseDpadComponentGroups) components.clear();
+    g_dualSenseDynamicComponents.clear();
+    g_dualSenseDynamicTriangles.clear();
+    g_dualSenseModelDepthCache.clear();
+    g_dualSenseControlCache.reset();
+    g_dualSenseControlCacheInputSignature = UINT64_MAX;
+    g_dualSenseMovingControlCache.reset();
+    g_dualSenseMovingControlCacheInputSignature = UINT64_MAX;
     g_dualSenseTextures = {};
     g_dualSenseNormalTextures = {};
     g_dualSenseRoughnessTextures = {};
@@ -594,6 +631,22 @@ bool loadDualSenseMesh(const fs::path& path) {
     // each angle, so the dense CAD export stays watertight without costing a
     // frame of work while the page is idle.
     constexpr std::size_t kTargetTrianglesPerPart = 60000;
+    std::vector<std::uint32_t> componentParent;
+    auto findComponent = [&](std::uint32_t index) {
+        std::uint32_t root = index;
+        while (root < componentParent.size() && componentParent[root] != root) root = componentParent[root];
+        while (index < componentParent.size() && componentParent[index] != index) {
+            const std::uint32_t next = componentParent[index];
+            componentParent[index] = root;
+            index = next;
+        }
+        return root;
+    };
+    auto unionComponents = [&](std::uint32_t first, std::uint32_t second) {
+        const std::uint32_t rootFirst = findComponent(first);
+        const std::uint32_t rootSecond = findComponent(second);
+        if (rootFirst != rootSecond && rootSecond < componentParent.size()) componentParent[rootSecond] = rootFirst;
+    };
     for (int part = 0; part < 3; ++part) {
         const std::string geometryMarker = "<geometry id=\"meshId" + std::to_string(part) + "\"";
         const std::size_t geometryStart = xml.find(geometryMarker);
@@ -645,6 +698,8 @@ bool loadDualSenseMesh(const fs::path& path) {
             }
             g_dualSenseMesh.vertices.push_back(vertex);
         }
+        componentParent.resize(g_dualSenseMesh.vertices.size());
+        for (std::uint32_t index = vertexOffset; index < componentParent.size(); ++index) componentParent[index] = index;
 
         const std::size_t polylistStart = xml.find("<polylist", geometryStart);
         if (polylistStart == std::string::npos || polylistStart >= geometryEnd) continue;
@@ -685,6 +740,11 @@ bool loadDualSenseMesh(const fs::path& path) {
                     faceVertices.push_back(vertexOffset + static_cast<std::uint32_t>(index));
                 }
             }
+            if (faceVertices.size() >= 3) {
+                for (std::size_t corner = 1; corner < faceVertices.size(); ++corner) {
+                    unionComponents(faceVertices[0], faceVertices[corner]);
+                }
+            }
             if (faceVertices.size() < 3 || face % sampleStep != 0) continue;
             for (std::size_t corner = 1; corner + 1 < faceVertices.size(); ++corner) {
                 g_dualSenseMesh.triangles.push_back({faceVertices[0], faceVertices[corner], faceVertices[corner + 1], static_cast<std::uint8_t>(part)});
@@ -694,6 +754,108 @@ bool loadDualSenseMesh(const fs::path& path) {
     if (g_dualSenseMesh.vertices.empty() || g_dualSenseMesh.triangles.empty()) {
         g_dualSenseMesh = {};
         return false;
+    }
+    for (std::size_t index = 0; index < g_dualSenseMesh.vertices.size(); ++index) {
+        g_dualSenseMesh.vertices[index].component = findComponent(static_cast<std::uint32_t>(index));
+    }
+    auto nearestControlComponent = [&](float x, float y, float radius, float minimumZ) {
+        struct Score {
+            int totalCount = 0;
+            int nearbyCount = 0;
+            double sumX = 0.0;
+            double sumY = 0.0;
+            double sumZ = 0.0;
+            float highestZ = -std::numeric_limits<float>::infinity();
+        };
+        std::unordered_map<std::uint32_t, Score> candidates;
+        for (const DualSenseMeshVertex& vertex : g_dualSenseMesh.vertices) {
+            if (vertex.component == UINT32_MAX) continue;
+            Score& score = candidates[vertex.component];
+            ++score.totalCount;
+            score.sumX += vertex.x;
+            score.sumY += vertex.y;
+            score.sumZ += vertex.z;
+            score.highestZ = std::max(score.highestZ, vertex.z);
+            if (vertex.z < minimumZ) continue;
+            const float dx = vertex.x - x;
+            const float dy = vertex.y - y;
+            if (dx * dx + dy * dy >= radius * radius) continue;
+            ++score.nearbyCount;
+        }
+        std::uint32_t selected = UINT32_MAX;
+        float bestDistance = std::numeric_limits<float>::infinity();
+        float bestHighestZ = -std::numeric_limits<float>::infinity();
+        for (const auto& [component, score] : candidates) {
+            if (score.nearbyCount == 0 || score.totalCount == 0) continue;
+            const float centerX = static_cast<float>(score.sumX / score.totalCount);
+            const float centerY = static_cast<float>(score.sumY / score.totalCount);
+            const float dx = centerX - x;
+            const float dy = centerY - y;
+            const float distance = dx * dx + dy * dy;
+            // Several caps contain nested material layers with the same
+            // centroid.  In that case choose the outermost/highest layer.
+            if (distance < bestDistance - 0.000001f ||
+                (std::abs(distance - bestDistance) <= 0.000001f && score.highestZ > bestHighestZ)) {
+                selected = component;
+                bestDistance = distance;
+                bestHighestZ = score.highestZ;
+            }
+        }
+        return selected;
+    };
+    // Components are selected from the actual CAD topology, so these masks
+    // remain correct if the model is resampled at a different triangle rate.
+    // Anchors are measured in the CAD model coordinate system.  Keeping them
+    // at the cap centroids (instead of using screen-space guesses) means that
+    // the same component is animated at every camera angle and resolution.
+    g_dualSenseControlComponents[3] = nearestControlComponent(0.622f, 0.423f, 0.085f, 0.285f);
+    g_dualSenseControlComponents[2] = nearestControlComponent(0.771f, 0.276f, 0.085f, 0.255f);
+    g_dualSenseControlComponents[1] = nearestControlComponent(0.622f, 0.129f, 0.085f, 0.275f);
+    g_dualSenseControlComponents[0] = nearestControlComponent(0.476f, 0.276f, 0.085f, 0.295f);
+    g_dualSenseControlComponents[10] = nearestControlComponent(-0.318f, -0.001f, 0.14f, 0.32f);
+    g_dualSenseControlComponents[11] = nearestControlComponent(0.318f, -0.001f, 0.14f, 0.32f);
+    // The CAD export contains two distinct shoulder layers: the lower
+    // bumper (L1/R1) and the raised analogue trigger (L2/R2).  Select each
+    // connected component independently so pressing one never moves the
+    // neighbouring cap.
+    g_dualSenseControlComponents[4] = nearestControlComponent(-0.598f, 0.556f, 0.19f, -0.20f);
+    g_dualSenseControlComponents[5] = nearestControlComponent(0.598f, 0.556f, 0.19f, -0.20f);
+    g_dualSenseControlComponents[6] = nearestControlComponent(-0.624f, 0.599f, 0.19f, 0.04f);
+    g_dualSenseControlComponents[7] = nearestControlComponent(0.624f, 0.599f, 0.19f, 0.04f);
+    g_dualSenseControlComponents[8] = nearestControlComponent(-0.467f, 0.496f, 0.09f, 0.245f);
+    g_dualSenseControlComponents[9] = nearestControlComponent(0.467f, 0.496f, 0.09f, 0.245f);
+    g_dualSenseControlComponents[12] = nearestControlComponent(0.0f, -0.10f, 0.08f, 0.18f);
+    g_dualSenseControlComponents[14] = nearestControlComponent(0.0f, -0.17f, 0.07f, 0.13f);
+    g_dualSenseControlComponents[13] = nearestControlComponent(0.0f, 0.405f, 0.39f, 0.292f);
+    g_dualSenseDpadComponents[0] = nearestControlComponent(-0.620f, 0.374f, 0.085f, 0.275f);
+    g_dualSenseDpadComponents[1] = nearestControlComponent(-0.529f, 0.274f, 0.085f, 0.275f);
+    g_dualSenseDpadComponents[2] = nearestControlComponent(-0.626f, 0.179f, 0.085f, 0.275f);
+    g_dualSenseDpadComponents[3] = nearestControlComponent(-0.721f, 0.280f, 0.085f, 0.275f);
+
+    // The selected component is the complete visible cap in this CAD export.
+    // Keeping one rigid component per input avoids moving stacked decorative
+    // layers twice and keeps the live pass small enough for real-time input.
+    for (std::size_t index = 0; index < g_dualSenseControlComponents.size(); ++index) {
+        if (g_dualSenseControlComponents[index] != UINT32_MAX) {
+            g_dualSenseControlComponentGroups[index] = {g_dualSenseControlComponents[index]};
+        }
+    }
+    for (std::size_t index = 0; index < g_dualSenseDpadComponents.size(); ++index) {
+        if (g_dualSenseDpadComponents[index] != UINT32_MAX) {
+            g_dualSenseDpadComponentGroups[index] = {g_dualSenseDpadComponents[index]};
+        }
+    }
+    for (const auto& components : g_dualSenseControlComponentGroups) {
+        g_dualSenseDynamicComponents.insert(components.begin(), components.end());
+    }
+    for (const auto& components : g_dualSenseDpadComponentGroups) {
+        g_dualSenseDynamicComponents.insert(components.begin(), components.end());
+    }
+    for (const DualSenseMeshTriangle& triangle : g_dualSenseMesh.triangles) {
+        if (triangle.a < g_dualSenseMesh.vertices.size() &&
+            g_dualSenseDynamicComponents.contains(g_dualSenseMesh.vertices[triangle.a].component)) {
+            g_dualSenseDynamicTriangles.push_back(triangle);
+        }
     }
     float minX = g_dualSenseMesh.vertices.front().x, maxX = minX;
     float minY = g_dualSenseMesh.vertices.front().y, maxY = minY;
@@ -1386,61 +1548,62 @@ std::uint32_t gamepadLightingPreviewRgb(ULONGLONG now) {
         return scaleColor(g_baseColor, brightness);
     }
 
-    const double intensity = brightness * std::clamp(g_effectIntensity.load() / 100.0, 0.0, 1.0);
+    // Keep this curve byte-for-byte compatible with the standalone DualSense
+    // lighting worker. The 3D preview must describe the packet being sent to
+    // the real lightbar, not an approximation of it.
+    const double amount = brightness * std::clamp(g_effectIntensity.load() / 100.0, 0.0, 1.0);
     const double elapsed = g_effectStartedAt == 0 || now <= g_effectStartedAt
         ? 0.0
         : (now - g_effectStartedAt) / 1000.0;
     const double speed = std::clamp(g_effectSpeed.load(), 0, 100);
-    const double phase = elapsed * (0.80 + speed * 0.055);
+    const double rate = 0.30 + speed / 38.0;
+    const double phase = elapsed * rate;
     double baseHue = 0.0, baseSaturation = 0.0;
     int baseBrightness = 0;
     rgbToHsv(g_baseColor, baseHue, baseSaturation, baseBrightness);
     const std::wstring mode = kEffects[effect].internal;
 
-    if (mode == L"Gradient") {
-        return OpenRgbClient::gradientColor(elapsed * gradientDegreesPerSecond(static_cast<int>(speed)),
-                                            0.18, g_baseColor, intensity);
+    if (mode == L"Rainbow" || mode == L"Spectrum Cycle" || mode == L"Gradient") {
+        return hsvColor(baseHue + phase * (mode == L"Gradient" ? 42.0 : 78.0), 0.98, amount);
     }
-    if (mode == L"Rainbow") return hsvColor(baseHue + elapsed * (24.0 + speed * 1.15), 1.0, intensity);
-    if (mode == L"Spectrum Cycle") return hsvColor(baseHue + elapsed * (20.0 + speed * 0.95), 1.0, intensity);
     if (mode == L"Breathing") {
-        const double pulse = 0.18 + 0.82 * ((std::sin(phase * 2.0) + 1.0) / 2.0);
-        return scaleColor(g_baseColor, intensity * pulse);
+        const double pulse = 0.12 + 0.88 * (std::sin(phase * 2.2) + 1.0) * 0.5;
+        return scaleColor(g_baseColor, amount * pulse);
     }
     if (mode == L"Wave") {
-        const double pulse = 0.30 + 0.70 * ((std::sin(phase * 2.2) + 1.0) / 2.0);
-        return hsvColor(baseHue + phase * 42.0, 0.92, intensity * pulse);
+        const double pulse = 0.58 + 0.42 * std::sin(phase * 2.0) * std::sin(phase * 2.0);
+        return hsvColor(baseHue + std::sin(phase * 1.6) * 90.0, 0.94, amount * pulse);
     }
     if (mode == L"Strobe") {
-        return scaleColor(g_baseColor, (static_cast<int>(std::floor(phase * 2.2)) & 1) ? 0.0 : intensity);
+        return scaleColor(g_baseColor, (static_cast<int>(std::floor(phase * 5.0)) & 1) ? 0.0 : amount);
     }
     if (mode == L"Random") {
-        const double hue = std::fmod(baseHue + std::floor(phase * 1.8) * 71.0, 360.0);
-        return hsvColor(hue, 0.95, intensity);
+        const double step = std::floor(phase * 1.8);
+        return hsvColor(std::fmod(step * 137.507764, 360.0), 0.95, amount);
     }
     if (mode == L"Music") {
-        const double volume = std::clamp(g_audioVolume.load(), 0.0, 1.0);
-        const double hueOffset = (g_audioTreble.load() - g_audioBass.load()) * 92.0;
-        return hsvColor(baseHue + hueOffset, 0.92, intensity * std::clamp(0.08 + volume, 0.0, 1.0));
+        const double pulse = 0.28 + 0.72 * std::abs(std::sin(phase * 3.1) * std::sin(phase * 0.83));
+        return hsvColor(baseHue + std::sin(phase) * 24.0, 0.90, amount * pulse);
     }
     if (mode == L"Ambilight") {
-        const std::uint32_t ambient = g_ambientAverage.load();
-        return scaleColor(ambient == 0 ? g_baseColor : ambient, intensity);
+        return hsvColor(baseHue + phase * 25.0, 0.82, amount);
     }
     if (mode == L"Neon") {
-        return hsvColor(285.0 + 65.0 * std::sin(phase), 0.90,
-                        intensity * (0.55 + 0.45 * std::abs(std::sin(phase * 1.7))));
+        return hsvColor(286.0 + std::sin(phase * 1.9) * 58.0, 0.92, amount);
     }
     if (mode == L"Water") {
-        return hsvColor(185.0 + 28.0 * std::sin(phase), 0.85,
-                        intensity * (0.45 + 0.55 * ((std::sin(phase * 1.4) + 1.0) / 2.0)));
+        return hsvColor(195.0 + std::sin(phase * 1.7) * 24.0, 0.88,
+                        amount * (0.62 + 0.38 * std::sin(phase * 2.1) * std::sin(phase * 2.1)));
     }
     if (mode == L"Scan") {
-        const double sweep = std::max(0.07, 1.0 - std::abs(0.5 - ((std::sin(phase) + 1.0) / 2.0)) * 1.8);
-        return scaleColor(g_baseColor, intensity * sweep);
+        const double pulse = 0.18 + 0.82 * std::abs(std::sin(phase * 2.5));
+        return scaleColor(g_baseColor, amount * pulse);
     }
-    if (mode == L"Stack") return hsvColor(baseHue + phase * 20.0, 0.90, intensity);
-    return scaleColor(g_baseColor, intensity);
+    if (mode == L"Stack") {
+        const double pulse = std::fmod(phase * 0.45, 1.0);
+        return scaleColor(g_baseColor, amount * pulse);
+    }
+    return scaleColor(g_baseColor, amount);
 }
 
 std::wstring hexColor(std::uint32_t rgb) {
@@ -4233,9 +4396,10 @@ bool updateDualSenseVisualAxes(ULONGLONG now, bool snap) {
 
     const float elapsedMs = static_cast<float>(std::clamp<ULONGLONG>(now - g_dualSenseVisualAxes.updatedAt, 1, 50));
     g_dualSenseVisualAxes.updatedAt = now;
-    // A 34 ms exponential response removes HID jitter while remaining nearly
-    // instantaneous to the player. The final epsilon snap prevents drift.
-    const float blend = 1.0f - std::exp(-elapsedMs / 34.0f);
+    // A 24 ms critically damped response removes HID jitter while keeping the
+    // visual knob practically latency-free at the 60 Hz input cadence. The
+    // final epsilon snap prevents long-tail drift when the stick is released.
+    const float blend = 1.0f - std::exp(-elapsedMs / 24.0f);
     bool changed = false;
     auto approach = [&](float& current, float target) {
         const float before = current;
@@ -4253,20 +4417,55 @@ bool updateDualSenseVisualAxes(ULONGLONG now, bool snap) {
 std::uint64_t dualSenseModelInputSignature(bool liveInput) {
     if (!liveInput) return 0;
     std::uint64_t signature = static_cast<std::uint64_t>(g_dualSenseLive.dpad & 0x0f);
-    for (std::size_t index = 0; index < g_dualSenseLive.buttons.size(); ++index) {
-        if (g_dualSenseLive.buttons[index]) signature |= (1ull << (4 + index));
+    for (std::size_t index = 0; index < 15; ++index) {
+        if (g_dualSenseLive.buttons[index]) signature |= 1ull << (4 + index);
     }
-    auto quantizedAxis = [](float value) -> std::uint64_t {
+    auto axisByte = [](float value) {
         return static_cast<std::uint64_t>(std::clamp(
-            static_cast<int>(std::lround((std::clamp(value, -1.0f, 1.0f) + 1.0f) * 32.0f)), 0, 64));
+            static_cast<int>(std::lround((std::clamp(value, -1.0f, 1.0f) + 1.0f) * 127.5f)), 0, 255));
     };
-    signature |= quantizedAxis(g_dualSenseVisualAxes.leftX) << 20;
-    signature |= quantizedAxis(g_dualSenseVisualAxes.leftY) << 27;
-    signature |= quantizedAxis(g_dualSenseVisualAxes.rightX) << 34;
-    signature |= quantizedAxis(g_dualSenseVisualAxes.rightY) << 41;
-    signature |= static_cast<std::uint64_t>(g_dualSenseLive.leftTrigger / 24) << 48;
-    signature |= static_cast<std::uint64_t>(g_dualSenseLive.rightTrigger / 24) << 52;
+    signature |= axisByte(g_dualSenseVisualAxes.leftX) << 20;
+    signature |= axisByte(g_dualSenseVisualAxes.leftY) << 28;
+    signature |= axisByte(g_dualSenseVisualAxes.rightX) << 36;
+    signature |= axisByte(g_dualSenseVisualAxes.rightY) << 44;
+    signature |= static_cast<std::uint64_t>(g_dualSenseLive.leftTrigger / 4) << 52;
+    signature |= static_cast<std::uint64_t>(g_dualSenseLive.rightTrigger / 4) << 58;
     return signature;
+}
+
+std::uint32_t dualSenseActiveControlMask(bool liveInput) {
+    if (!liveInput) return 0;
+    std::uint32_t mask = 0;
+    for (std::size_t index = 0; index < 15; ++index) {
+        if (g_dualSenseLive.buttons[index]) mask |= 1u << index;
+    }
+    const float leftMagnitude = std::hypot(g_dualSenseVisualAxes.leftX, g_dualSenseVisualAxes.leftY);
+    const float rightMagnitude = std::hypot(g_dualSenseVisualAxes.rightX, g_dualSenseVisualAxes.rightY);
+    if (leftMagnitude > 0.002f) mask |= 1u << 10;
+    if (rightMagnitude > 0.002f) mask |= 1u << 11;
+    if (g_dualSenseLive.leftTrigger > 1) mask |= 1u << 6;
+    if (g_dualSenseLive.rightTrigger > 1) mask |= 1u << 7;
+    const int dpad = g_dualSenseLive.dpad;
+    if (dpad == 0 || dpad == 1 || dpad == 7) mask |= 1u << 15;
+    if (dpad == 1 || dpad == 2 || dpad == 3) mask |= 1u << 16;
+    if (dpad == 3 || dpad == 4 || dpad == 5) mask |= 1u << 17;
+    if (dpad == 5 || dpad == 6 || dpad == 7) mask |= 1u << 18;
+    return mask;
+}
+
+std::set<std::uint32_t> dualSenseComponentsForMask(std::uint32_t mask) {
+    std::set<std::uint32_t> components;
+    for (std::size_t index = 0; index < g_dualSenseControlComponentGroups.size(); ++index) {
+        if ((mask & (1u << index)) == 0) continue;
+        components.insert(g_dualSenseControlComponentGroups[index].begin(),
+                          g_dualSenseControlComponentGroups[index].end());
+    }
+    for (std::size_t index = 0; index < g_dualSenseDpadComponentGroups.size(); ++index) {
+        if ((mask & (1u << (15 + index))) == 0) continue;
+        components.insert(g_dualSenseDpadComponentGroups[index].begin(),
+                          g_dualSenseDpadComponentGroups[index].end());
+    }
+    return components;
 }
 
 float dualSenseButtonPressAt(const DualSenseMeshVertex& vertex, bool liveInput) {
@@ -4276,95 +4475,152 @@ float dualSenseButtonPressAt(const DualSenseMeshVertex& vertex, bool liveInput) 
         const float dy = vertex.y - y;
         return dx * dx + dy * dy <= radius * radius;
     };
-    // L1/R1 are shallow caps in the CAD mesh, so their top surface is below
-    // the face-button height threshold used by the other controls.
-    if ((g_dualSenseLive.buttons[4] && inside(-0.47f, 0.46f, 0.070f)) ||
-        (g_dualSenseLive.buttons[5] && inside(0.43f, 0.46f, 0.070f))) {
-        return vertex.z >= 0.18f ? 1.0f : 0.0f;
+    auto onControl = [&](const std::vector<std::uint32_t>& components, float x, float y, float radius) {
+        return !components.empty()
+            ? std::binary_search(components.begin(), components.end(), vertex.component)
+            : inside(x, y, radius);
+    };
+    // Highlight the real connected component rather than a circle projected
+    // over the shell.  This keeps the feedback exactly on the physical cap at
+    // every camera angle and prevents adjacent keys from flashing.
+    if ((g_dualSenseLive.buttons[4] && onControl(g_dualSenseControlComponentGroups[4], -0.598f, 0.556f, 0.18f)) ||
+        (g_dualSenseLive.buttons[5] && onControl(g_dualSenseControlComponentGroups[5], 0.598f, 0.556f, 0.18f))) {
+        return 1.0f;
     }
-    if (vertex.z < 0.255f) return 0.0f;
+    if (onControl(g_dualSenseControlComponentGroups[6], -0.624f, 0.599f, 0.18f)) {
+        return g_dualSenseLive.leftTrigger / 255.0f;
+    }
+    if (onControl(g_dualSenseControlComponentGroups[7], 0.624f, 0.599f, 0.18f)) {
+        return g_dualSenseLive.rightTrigger / 255.0f;
+    }
     const int dpad = g_dualSenseLive.dpad;
     const bool up = dpad == 0 || dpad == 1 || dpad == 7;
     const bool right = dpad == 1 || dpad == 2 || dpad == 3;
     const bool down = dpad == 3 || dpad == 4 || dpad == 5;
     const bool left = dpad == 5 || dpad == 6 || dpad == 7;
-    if ((g_dualSenseLive.buttons[3] && inside(0.615f, 0.405f, 0.078f)) ||
-        (g_dualSenseLive.buttons[2] && inside(0.768f, 0.275f, 0.078f)) ||
-        (g_dualSenseLive.buttons[1] && inside(0.610f, 0.170f, 0.078f)) ||
-        (g_dualSenseLive.buttons[0] && inside(0.476f, 0.278f, 0.078f)) ||
-        (up && inside(-0.623f, 0.402f, 0.075f)) ||
-        (right && inside(-0.511f, 0.281f, 0.075f)) ||
-        (down && inside(-0.627f, 0.150f, 0.075f)) ||
-        (left && inside(-0.750f, 0.280f, 0.075f)) ||
-        (g_dualSenseLive.buttons[10] && inside(-0.31f, -0.06f, 0.125f)) ||
-        (g_dualSenseLive.buttons[11] && inside(0.31f, -0.06f, 0.125f)) ||
-        (g_dualSenseLive.buttons[8] && inside(-0.47f, 0.46f, 0.050f)) ||
-        (g_dualSenseLive.buttons[9] && inside(0.43f, 0.46f, 0.050f)) ||
-        (g_dualSenseLive.buttons[12] && inside(0.0f, -0.09f, 0.070f)) ||
-        (g_dualSenseLive.buttons[14] && inside(0.0f, -0.20f, 0.052f))) {
+    if ((g_dualSenseLive.buttons[3] && onControl(g_dualSenseControlComponentGroups[3], 0.622f, 0.423f, 0.066f)) ||
+        (g_dualSenseLive.buttons[2] && onControl(g_dualSenseControlComponentGroups[2], 0.771f, 0.276f, 0.066f)) ||
+        (g_dualSenseLive.buttons[1] && onControl(g_dualSenseControlComponentGroups[1], 0.622f, 0.129f, 0.066f)) ||
+        (g_dualSenseLive.buttons[0] && onControl(g_dualSenseControlComponentGroups[0], 0.476f, 0.276f, 0.066f)) ||
+        (up && onControl(g_dualSenseDpadComponentGroups[0], -0.620f, 0.374f, 0.060f)) ||
+        (right && onControl(g_dualSenseDpadComponentGroups[1], -0.529f, 0.274f, 0.060f)) ||
+        (down && onControl(g_dualSenseDpadComponentGroups[2], -0.626f, 0.179f, 0.060f)) ||
+        (left && onControl(g_dualSenseDpadComponentGroups[3], -0.721f, 0.280f, 0.060f)) ||
+        (g_dualSenseLive.buttons[10] && onControl(g_dualSenseControlComponentGroups[10], -0.318f, -0.001f, 0.100f)) ||
+        (g_dualSenseLive.buttons[11] && onControl(g_dualSenseControlComponentGroups[11], 0.318f, -0.001f, 0.100f)) ||
+        (g_dualSenseLive.buttons[8] && onControl(g_dualSenseControlComponentGroups[8], -0.467f, 0.496f, 0.050f)) ||
+        (g_dualSenseLive.buttons[9] && onControl(g_dualSenseControlComponentGroups[9], 0.467f, 0.496f, 0.050f)) ||
+        (g_dualSenseLive.buttons[12] && onControl(g_dualSenseControlComponentGroups[12], 0.0f, -0.10f, 0.055f)) ||
+        (g_dualSenseLive.buttons[14] && onControl(g_dualSenseControlComponentGroups[14], 0.0f, -0.17f, 0.050f))) {
         return 1.0f;
     }
-    if (g_dualSenseLive.buttons[13] && std::abs(vertex.x) < 0.40f && vertex.y > 0.24f && vertex.y < 0.57f) {
+    if (g_dualSenseLive.buttons[13] &&
+        onControl(g_dualSenseControlComponentGroups[13], 0.0f, 0.405f, 0.39f)) {
         return 1.0f;
     }
     return 0.0f;
 }
 
-float dualSenseTriggerPressAt(const DualSenseMeshVertex& vertex, bool liveInput) {
-    // The shoulder triggers sit lower than the top bumpers in the supplied
-    // mesh. Keep the hit volume broad enough to cover both the front and side
-    // faces, otherwise L2/R2 appear in telemetry but never move visually.
-    if (!liveInput || vertex.z < 0.18f || vertex.y < 0.47f) return 0.0f;
-    // L2/R2 are the two raised black trigger caps at the very top of the
-    // front view (well outside the L1/R1 bumper pair).
-    const float leftDistance = std::sqrt((vertex.x + 0.60f) * (vertex.x + 0.60f) +
-                                         (vertex.y - 0.60f) * (vertex.y - 0.60f));
-    const float rightDistance = std::sqrt((vertex.x - 0.60f) * (vertex.x - 0.60f) +
-                                          (vertex.y - 0.60f) * (vertex.y - 0.60f));
-    const float left = leftDistance < 0.19f ? g_dualSenseLive.leftTrigger / 255.0f : 0.0f;
-    const float right = rightDistance < 0.19f ? g_dualSenseLive.rightTrigger / 255.0f : 0.0f;
-    return std::max(left, right);
-}
-
 DualSenseMeshVertex animateDualSenseVertex(const DualSenseMeshVertex& source, bool liveInput) {
     DualSenseMeshVertex vertex = source;
     if (!liveInput) return vertex;
-    const float buttonPress = dualSenseButtonPressAt(source, liveInput);
-    const float triggerPress = dualSenseTriggerPressAt(source, liveInput);
-    if (source.z < 0.18f && buttonPress <= 0.0f && triggerPress <= 0.0f) return vertex;
-    auto inside = [&](float x, float y, float radius) {
+    // When the CAD topology exposes a separate control, translate that entire
+    // component rigidly.  A radial mask is only kept as a fallback for unusual
+    // exports.  Rigid motion avoids stretching the cap or the surrounding
+    // shell while the controller is animated.
+    auto influence = [&](float x, float y, float radius, float zMin, float normalMin,
+                         const std::vector<std::uint32_t>& components) {
+        if (!components.empty()) {
+            return std::binary_search(components.begin(), components.end(), source.component) ? 1.0f : 0.0f;
+        }
+        if (source.z < zMin || source.nz < normalMin) return 0.0f;
         const float dx = source.x - x;
         const float dy = source.y - y;
-        return dx * dx + dy * dy <= radius * radius;
+        const float distance = std::sqrt(dx * dx + dy * dy);
+        if (distance >= radius) return 0.0f;
+        const float radial = 1.0f - distance / radius;
+        const float radialSmooth = radial * radial * (3.0f - 2.0f * radial);
+        const float height = std::clamp((source.z - zMin) / 0.045f, 0.0f, 1.0f);
+        return radialSmooth * height;
     };
-    if (inside(-0.31f, -0.06f, 0.135f) && source.z > 0.22f) {
-        vertex.x += g_dualSenseVisualAxes.leftX * 0.060f;
-        vertex.y -= g_dualSenseVisualAxes.leftY * 0.060f;
-    } else if (inside(0.31f, -0.06f, 0.135f) && source.z > 0.22f) {
-        vertex.x += g_dualSenseVisualAxes.rightX * 0.060f;
-        vertex.y -= g_dualSenseVisualAxes.rightY * 0.060f;
-    }
-    const bool shoulderVertex =
-        (g_dualSenseLive.buttons[4] && inside(-0.47f, 0.46f, 0.070f)) ||
-        (g_dualSenseLive.buttons[5] && inside(0.43f, 0.46f, 0.070f));
-    if (shoulderVertex) vertex.y -= buttonPress * 0.018f;
-    if (triggerPress > 0.0f) vertex.y -= triggerPress * 0.050f;
-    vertex.z -= buttonPress * 0.035f;
-    vertex.z -= triggerPress * 0.028f;
+    auto activeInfluence = [&](bool active, float x, float y, float radius, float zMin,
+                               float normalMin, const std::vector<std::uint32_t>& components) {
+        return active ? influence(x, y, radius, zMin, normalMin, components) : 0.0f;
+    };
+
+    // Stick caps: only the raised knob moves. The surrounding well and shell
+    // stay fixed, while the already smoothed axes make the motion continuous.
+    const float leftStick = influence(-0.318f, -0.001f, 0.12f, 0.32f, 0.10f, g_dualSenseControlComponentGroups[10]);
+    const float rightStick = influence(0.318f, -0.001f, 0.12f, 0.32f, 0.10f, g_dualSenseControlComponentGroups[11]);
+    vertex.x += g_dualSenseVisualAxes.leftX * leftStick * 0.050f;
+    vertex.y -= g_dualSenseVisualAxes.leftY * leftStick * 0.050f;
+    vertex.x += g_dualSenseVisualAxes.rightX * rightStick * 0.050f;
+    vertex.y -= g_dualSenseVisualAxes.rightY * rightStick * 0.050f;
+
+    float facePress = 0.0f;
+    facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[3], 0.622f, 0.423f, 0.070f, 0.285f, -0.35f, g_dualSenseControlComponentGroups[3]));
+    facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[2], 0.771f, 0.276f, 0.070f, 0.255f, -0.35f, g_dualSenseControlComponentGroups[2]));
+    facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[1], 0.622f, 0.129f, 0.070f, 0.275f, -0.35f, g_dualSenseControlComponentGroups[1]));
+    facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[0], 0.476f, 0.276f, 0.070f, 0.295f, -0.35f, g_dualSenseControlComponentGroups[0]));
+    facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[4], -0.598f, 0.556f, 0.18f, -0.20f, -1.0f, g_dualSenseControlComponentGroups[4]));
+    facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[5], 0.598f, 0.556f, 0.18f, -0.20f, -1.0f, g_dualSenseControlComponentGroups[5]));
+
+    const int dpad = g_dualSenseLive.dpad;
+    facePress = std::max(facePress, activeInfluence(dpad == 0 || dpad == 1 || dpad == 7, -0.620f, 0.374f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[0]));
+    facePress = std::max(facePress, activeInfluence(dpad == 1 || dpad == 2 || dpad == 3, -0.529f, 0.274f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[1]));
+    facePress = std::max(facePress, activeInfluence(dpad == 3 || dpad == 4 || dpad == 5, -0.626f, 0.179f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[2]));
+    facePress = std::max(facePress, activeInfluence(dpad == 5 || dpad == 6 || dpad == 7, -0.721f, 0.280f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[3]));
+    facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[8], -0.467f, 0.496f, 0.060f, 0.245f, -0.35f, g_dualSenseControlComponentGroups[8]));
+    facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[9], 0.467f, 0.496f, 0.060f, 0.245f, -0.35f, g_dualSenseControlComponentGroups[9]));
+    facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[12], 0.0f, -0.10f, 0.060f, 0.18f, -0.35f, g_dualSenseControlComponentGroups[12]));
+    facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[14], 0.0f, -0.17f, 0.055f, 0.13f, -0.35f, g_dualSenseControlComponentGroups[14]));
+
+    const float touchpadPress = g_dualSenseLive.buttons[13] &&
+                                std::binary_search(g_dualSenseControlComponentGroups[13].begin(),
+                                                   g_dualSenseControlComponentGroups[13].end(),
+                                                   source.component) ? 1.0f : 0.0f;
+    // Face keys travel only a few millimetres. Keeping the depth change small
+    // prevents the shell behind a cap from winning the depth test and removes
+    // the grey ``cut-out'' artefact seen on the touchpad.
+    vertex.z -= facePress * 0.008f;
+    // The touchpad moves as one rigid plate, along the same depth axis as the
+    // real click mechanism.
+    vertex.z -= touchpadPress * 0.0050f;
+
+    // L2/R2 have a longer travel and a slightly forward/downward arc, but the
+    // same compact influence keeps their caps separate from the shoulders.
+    const float leftTrigger = g_dualSenseLive.leftTrigger / 255.0f;
+    const float rightTrigger = g_dualSenseLive.rightTrigger / 255.0f;
+    const float triggerWeight = std::max(
+        leftTrigger * influence(-0.624f, 0.599f, 0.19f, 0.04f, -1.0f, g_dualSenseControlComponentGroups[6]),
+        rightTrigger * influence(0.624f, 0.599f, 0.19f, 0.04f, -1.0f, g_dualSenseControlComponentGroups[7]));
+    vertex.y -= triggerWeight * 0.018f;
+    vertex.z -= triggerWeight * 0.010f;
     return vertex;
 }
 
-void drawDualSenseRasterMesh(Graphics& target, const RectF& modelRect, bool liveInput) {
+enum class DualSenseRasterPass { Full, StaticBody, DynamicControls };
+
+void drawDualSenseRasterMesh(Graphics& target, const RectF& modelRect, bool liveInput,
+                             DualSenseRasterPass pass = DualSenseRasterPass::Full,
+                             std::vector<float>* depthOutput = nullptr,
+                             const std::vector<float>* staticDepth = nullptr,
+                             const std::set<std::uint32_t>* selectedComponents = nullptr,
+                             bool excludeSelectedComponents = false) {
     const int width = std::max(1, static_cast<int>(std::lround(modelRect.Width)));
     const int height = std::max(1, static_cast<int>(std::lround(modelRect.Height)));
     Bitmap raster(width, height, PixelFormat32bppARGB);
     if (raster.GetLastStatus() != Ok) return;
     {
         Graphics background(&raster);
-        SolidBrush backdrop(Color(255, 20, 24, 36));
-        background.FillRectangle(&backdrop, RectF(0, 0, static_cast<REAL>(width), static_cast<REAL>(height)));
-        SolidBrush shadow(Color(85, 0, 0, 0));
-        background.FillEllipse(&shadow, RectF(width * 0.17f, height - 45.0f, width * 0.66f, 34.0f));
+        if (pass == DualSenseRasterPass::DynamicControls) {
+            background.Clear(Color(0, 0, 0, 0));
+        } else {
+            SolidBrush backdrop(Color(255, 20, 24, 36));
+            background.FillRectangle(&backdrop, RectF(0, 0, static_cast<REAL>(width), static_cast<REAL>(height)));
+            SolidBrush shadow(Color(85, 0, 0, 0));
+            background.FillEllipse(&shadow, RectF(width * 0.17f, height - 45.0f, width * 0.66f, 34.0f));
+        }
     }
 
     Rect lockRect(0, 0, width, height);
@@ -4372,6 +4628,7 @@ void drawDualSenseRasterMesh(Graphics& target, const RectF& modelRect, bool live
     if (raster.LockBits(&lockRect, ImageLockModeRead | ImageLockModeWrite, PixelFormat32bppARGB, &bitmapData) != Ok) return;
     std::vector<float> depthBuffer(static_cast<std::size_t>(width) * height,
                                    -std::numeric_limits<float>::infinity());
+    if (staticDepth && staticDepth->size() == depthBuffer.size()) depthBuffer = *staticDepth;
     const float cx = width * 0.5f;
     const float cy = height * 0.51f;
     const float scale = std::min(width * 0.47f, height * 0.73f);
@@ -4436,7 +4693,7 @@ void drawDualSenseRasterMesh(Graphics& target, const RectF& modelRect, bool live
             return x * x + y * y < 0.78f;
         };
         float x = 0, y = 0;
-        if (local(0.615f, 0.405f, x, y)) {
+        if (local(0.622f, 0.423f, x, y)) {
             return std::max({stroke(lineDistance(x, y, 0.0f, 0.48f, -0.43f, -0.34f)),
                              stroke(lineDistance(x, y, -0.43f, -0.34f, 0.43f, -0.34f)),
                              stroke(lineDistance(x, y, 0.43f, -0.34f, 0.0f, 0.48f))});
@@ -4444,7 +4701,7 @@ void drawDualSenseRasterMesh(Graphics& target, const RectF& modelRect, bool live
         if (local(0.768f, 0.275f, x, y)) {
             return stroke(std::abs(std::sqrt(x * x + y * y) - 0.43f));
         }
-        if (local(0.610f, 0.170f, x, y)) {
+        if (local(0.622f, 0.129f, x, y)) {
             return std::max(stroke(lineDistance(x, y, -0.36f, -0.36f, 0.36f, 0.36f)),
                             stroke(lineDistance(x, y, -0.36f, 0.36f, 0.36f, -0.36f)));
         }
@@ -4458,12 +4715,21 @@ void drawDualSenseRasterMesh(Graphics& target, const RectF& modelRect, bool live
     };
 
     const DualSenseRenderPoint light{0.35f, 0.65f, 1.0f};
-    for (const DualSenseMeshTriangle& triangle : g_dualSenseMesh.triangles) {
+    const std::vector<DualSenseMeshTriangle>& renderTriangles =
+        pass == DualSenseRasterPass::DynamicControls ? g_dualSenseDynamicTriangles : g_dualSenseMesh.triangles;
+    for (const DualSenseMeshTriangle& triangle : renderTriangles) {
         if (triangle.a >= g_dualSenseMesh.vertices.size() || triangle.b >= g_dualSenseMesh.vertices.size() ||
             triangle.c >= g_dualSenseMesh.vertices.size()) continue;
         const DualSenseMeshVertex sourceA = g_dualSenseMesh.vertices[triangle.a];
         const DualSenseMeshVertex sourceB = g_dualSenseMesh.vertices[triangle.b];
         const DualSenseMeshVertex sourceC = g_dualSenseMesh.vertices[triangle.c];
+        const bool dynamicComponent = g_dualSenseDynamicComponents.contains(sourceA.component);
+        if ((pass == DualSenseRasterPass::StaticBody && dynamicComponent) ||
+            (pass == DualSenseRasterPass::DynamicControls && !dynamicComponent)) continue;
+        if (pass == DualSenseRasterPass::DynamicControls && selectedComponents) {
+            const bool selected = selectedComponents->contains(sourceA.component);
+            if ((!excludeSelectedComponents && !selected) || (excludeSelectedComponents && selected)) continue;
+        }
         const DualSenseMeshVertex animatedA = animateDualSenseVertex(sourceA, liveInput);
         const DualSenseMeshVertex animatedB = animateDualSenseVertex(sourceB, liveInput);
         const DualSenseMeshVertex animatedC = animateDualSenseVertex(sourceC, liveInput);
@@ -4596,6 +4862,7 @@ void drawDualSenseRasterMesh(Graphics& target, const RectF& modelRect, bool live
             }
         }
     }
+    if (depthOutput) *depthOutput = depthBuffer;
     raster.UnlockBits(&bitmapData);
     const InterpolationMode previousInterpolation = target.GetInterpolationMode();
     // During a drag this bitmap is rebuilt for each camera step. Bilinear
@@ -4608,69 +4875,123 @@ void drawDualSenseRasterMesh(Graphics& target, const RectF& modelRect, bool live
 
 void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInput, bool lightingReady) {
     if (!g_dualSenseMesh.loaded || g_dualSenseMesh.vertices.empty()) return;
-    const bool buildMesh = g_dualSenseMeshOnly;
     const SmoothingMode oldSmoothing = graphics.GetSmoothingMode();
-    if (!buildMesh) {
-        // Rebuild the dense mesh on small angular steps while dragging. This
-        // avoids doing a full 100k-face sort for every raw mouse event while
-        // preserving a continuous-looking rotation.
-        const float cacheAngleStep = g_gamepadDragging ? 0.085f : 0.045f;
-        const float cacheYaw = std::round(g_gamepadYaw / cacheAngleStep) * cacheAngleStep;
-        const float cachePitch = std::round(g_gamepadPitch / cacheAngleStep) * cacheAngleStep;
-        // Keep the cache at display resolution so live stick movement can be
-        // rebuilt without stalling the interface. Fine symbols are generated
-        // procedurally in model space and remain readable at this resolution.
-        // Render idle frames above display resolution and downsample them with
-        // a high-quality filter. During a drag, switch to native resolution so
-        // camera rotation stays responsive even on modest CPUs.
-        // A slightly smaller drag bitmap reduces the per-frame raster cost by
-        // roughly a quarter. It is only used while rotating; the released
-        // controller is rendered at 110% for a crisp final image.
-        const float modelSupersampling = g_gamepadDragging ? 0.86f : 1.10f;
-        const int cacheWidth = std::max(1, static_cast<int>(std::lround(modelRect.Width * modelSupersampling)));
-        const int cacheHeight = std::max(1, static_cast<int>(std::lround(modelRect.Height * modelSupersampling)));
-        const std::uint64_t inputSignature = dualSenseModelInputSignature(liveInput);
-        const bool cacheValid = g_dualSenseModelCache && g_dualSenseModelCacheWidth == cacheWidth &&
-                                g_dualSenseModelCacheHeight == cacheHeight &&
-                                std::abs(g_dualSenseModelCacheYaw - cacheYaw) < 0.0001f &&
-                                std::abs(g_dualSenseModelCachePitch - cachePitch) < 0.0001f &&
-                                g_dualSenseModelCacheInputSignature == inputSignature;
-        if (!cacheValid) {
-            g_dualSenseModelCache = std::make_unique<Bitmap>(cacheWidth, cacheHeight, PixelFormat32bppPARGB);
-            if (g_dualSenseModelCache && g_dualSenseModelCache->GetLastStatus() == Ok) {
-                Graphics cacheGraphics(g_dualSenseModelCache.get());
-                g_dualSenseMeshOnly = true;
-                const float savedYaw = g_gamepadYaw;
-                const float savedPitch = g_gamepadPitch;
-                g_gamepadYaw = cacheYaw;
-                g_gamepadPitch = cachePitch;
-                drawDualSenseModel(cacheGraphics, RectF(0, 0, static_cast<REAL>(cacheWidth), static_cast<REAL>(cacheHeight)),
-                                   liveInput, lightingReady);
-                g_gamepadYaw = savedYaw;
-                g_gamepadPitch = savedPitch;
-                g_dualSenseMeshOnly = false;
-                g_dualSenseModelCacheWidth = cacheWidth;
-                g_dualSenseModelCacheHeight = cacheHeight;
-                g_dualSenseModelCacheYaw = cacheYaw;
-                g_dualSenseModelCachePitch = cachePitch;
-                g_dualSenseModelCacheInputSignature = inputSignature;
-            } else {
-                g_dualSenseModelCache.reset();
-            }
-        }
+    // The shell is static while the controller is used, so rasterize it only
+    // when the camera angle or output size changes.  Buttons and sticks are a
+    // separate lightweight 3D pass.  This removes the old 100k-triangle rebuild
+    // from every joystick packet while preserving the original CAD quality.
+    const float cacheAngleStep = g_gamepadDragging ? 0.085f : 0.045f;
+    const float cacheYaw = std::round(g_gamepadYaw / cacheAngleStep) * cacheAngleStep;
+    const float cachePitch = std::round(g_gamepadPitch / cacheAngleStep) * cacheAngleStep;
+    const float modelSupersampling = g_gamepadDragging ? 0.86f : 1.10f;
+    const int cacheWidth = std::max(1, static_cast<int>(std::lround(modelRect.Width * modelSupersampling)));
+    const int cacheHeight = std::max(1, static_cast<int>(std::lround(modelRect.Height * modelSupersampling)));
+    const bool cacheValid = g_dualSenseModelCache && g_dualSenseModelCacheWidth == cacheWidth &&
+                            g_dualSenseModelCacheHeight == cacheHeight &&
+                            std::abs(g_dualSenseModelCacheYaw - cacheYaw) < 0.0001f &&
+                            std::abs(g_dualSenseModelCachePitch - cachePitch) < 0.0001f &&
+                            g_dualSenseModelDepthCache.size() == static_cast<std::size_t>(cacheWidth) * cacheHeight;
+    if (!cacheValid) {
+        g_dualSenseModelCache = std::make_unique<Bitmap>(cacheWidth, cacheHeight, PixelFormat32bppPARGB);
+        g_dualSenseModelDepthCache.clear();
+        g_dualSenseControlCache.reset();
+        g_dualSenseControlCacheInputSignature = UINT64_MAX;
+        g_dualSenseMovingControlCache.reset();
+        g_dualSenseMovingControlCacheInputSignature = UINT64_MAX;
         if (g_dualSenseModelCache && g_dualSenseModelCache->GetLastStatus() == Ok) {
-            const InterpolationMode previousInterpolation = graphics.GetInterpolationMode();
-            const PixelOffsetMode previousPixelOffset = graphics.GetPixelOffsetMode();
-            // Bilinear downsampling keeps the supersampled edges clean while
-            // avoiding the multi-pass cost of GDI+'s bicubic filter on every
-            // 16 ms repaint.
-            graphics.SetInterpolationMode(InterpolationModeBilinear);
-            graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
-            graphics.DrawImage(g_dualSenseModelCache.get(), modelRect);
-            graphics.SetInterpolationMode(previousInterpolation);
-            graphics.SetPixelOffsetMode(previousPixelOffset);
+            Graphics cacheGraphics(g_dualSenseModelCache.get());
+            const float savedYaw = g_gamepadYaw;
+            const float savedPitch = g_gamepadPitch;
+            g_gamepadYaw = cacheYaw;
+            g_gamepadPitch = cachePitch;
+            drawDualSenseRasterMesh(cacheGraphics,
+                                    RectF(0, 0, static_cast<REAL>(cacheWidth), static_cast<REAL>(cacheHeight)),
+                                    false, DualSenseRasterPass::StaticBody, &g_dualSenseModelDepthCache);
+            g_gamepadYaw = savedYaw;
+            g_gamepadPitch = savedPitch;
+            g_dualSenseModelCacheWidth = cacheWidth;
+            g_dualSenseModelCacheHeight = cacheHeight;
+            g_dualSenseModelCacheYaw = cacheYaw;
+            g_dualSenseModelCachePitch = cachePitch;
+        } else {
+            g_dualSenseModelCache.reset();
         }
     }
+    const InterpolationMode previousInterpolation = graphics.GetInterpolationMode();
+    const PixelOffsetMode previousPixelOffset = graphics.GetPixelOffsetMode();
+    graphics.SetInterpolationMode(InterpolationModeBilinear);
+    graphics.SetPixelOffsetMode(PixelOffsetModeHighQuality);
+    if (g_dualSenseModelCache && g_dualSenseModelCache->GetLastStatus() == Ok) {
+        graphics.DrawImage(g_dualSenseModelCache.get(), modelRect);
+    }
+    // Use the cache's exact quantized camera for controls, depth and lights so
+    // none of those layers can drift while the user rotates the controller.
+    const float savedOverlayYaw = g_gamepadYaw;
+    const float savedOverlayPitch = g_gamepadPitch;
+    g_gamepadYaw = cacheYaw;
+    g_gamepadPitch = cachePitch;
+    const std::uint32_t activeControlMask = dualSenseActiveControlMask(liveInput);
+    const std::set<std::uint32_t> movingComponents = dualSenseComponentsForMask(activeControlMask);
+    const bool controlCacheValid = g_dualSenseControlCache &&
+                                   g_dualSenseControlCacheWidth == cacheWidth &&
+                                   g_dualSenseControlCacheHeight == cacheHeight &&
+                                   std::abs(g_dualSenseControlCacheYaw - cacheYaw) < 0.0001f &&
+                                   std::abs(g_dualSenseControlCachePitch - cachePitch) < 0.0001f &&
+                                   g_dualSenseControlCacheInputSignature == activeControlMask;
+    if (!controlCacheValid) {
+        g_dualSenseControlCache = std::make_unique<Bitmap>(cacheWidth, cacheHeight, PixelFormat32bppPARGB);
+        if (g_dualSenseControlCache && g_dualSenseControlCache->GetLastStatus() == Ok) {
+            Graphics dynamicGraphics(g_dualSenseControlCache.get());
+            dynamicGraphics.Clear(Color(0, 0, 0, 0));
+            drawDualSenseRasterMesh(dynamicGraphics,
+                                    RectF(0, 0, static_cast<REAL>(cacheWidth), static_cast<REAL>(cacheHeight)),
+                                    false, DualSenseRasterPass::DynamicControls, nullptr,
+                                    &g_dualSenseModelDepthCache, &movingComponents, true);
+            g_dualSenseControlCacheWidth = cacheWidth;
+            g_dualSenseControlCacheHeight = cacheHeight;
+            g_dualSenseControlCacheYaw = cacheYaw;
+            g_dualSenseControlCachePitch = cachePitch;
+            g_dualSenseControlCacheInputSignature = activeControlMask;
+        } else {
+            g_dualSenseControlCache.reset();
+        }
+    }
+    if (g_dualSenseControlCache && g_dualSenseControlCache->GetLastStatus() == Ok) {
+        graphics.DrawImage(g_dualSenseControlCache.get(), modelRect);
+    }
+    const std::uint64_t inputSignature = dualSenseModelInputSignature(liveInput);
+    const bool movingCacheValid = g_dualSenseMovingControlCache &&
+                                  g_dualSenseMovingControlCacheWidth == cacheWidth &&
+                                  g_dualSenseMovingControlCacheHeight == cacheHeight &&
+                                  std::abs(g_dualSenseMovingControlCacheYaw - cacheYaw) < 0.0001f &&
+                                  std::abs(g_dualSenseMovingControlCachePitch - cachePitch) < 0.0001f &&
+                                  g_dualSenseMovingControlCacheInputSignature == inputSignature;
+    if (!movingCacheValid) {
+        g_dualSenseMovingControlCache = std::make_unique<Bitmap>(cacheWidth, cacheHeight, PixelFormat32bppPARGB);
+        if (g_dualSenseMovingControlCache && g_dualSenseMovingControlCache->GetLastStatus() == Ok) {
+            Graphics movingGraphics(g_dualSenseMovingControlCache.get());
+            movingGraphics.Clear(Color(0, 0, 0, 0));
+            if (!movingComponents.empty()) {
+                drawDualSenseRasterMesh(movingGraphics,
+                                        RectF(0, 0, static_cast<REAL>(cacheWidth), static_cast<REAL>(cacheHeight)),
+                                        liveInput, DualSenseRasterPass::DynamicControls, nullptr,
+                                        &g_dualSenseModelDepthCache, &movingComponents, false);
+            }
+            g_dualSenseMovingControlCacheWidth = cacheWidth;
+            g_dualSenseMovingControlCacheHeight = cacheHeight;
+            g_dualSenseMovingControlCacheYaw = cacheYaw;
+            g_dualSenseMovingControlCachePitch = cachePitch;
+            g_dualSenseMovingControlCacheInputSignature = inputSignature;
+        } else {
+            g_dualSenseMovingControlCache.reset();
+        }
+    }
+    if (g_dualSenseMovingControlCache && g_dualSenseMovingControlCache->GetLastStatus() == Ok) {
+        graphics.DrawImage(g_dualSenseMovingControlCache.get(), modelRect);
+    }
+    graphics.SetInterpolationMode(previousInterpolation);
+    graphics.SetPixelOffsetMode(previousPixelOffset);
+
     const float cx = modelRect.X + modelRect.Width * 0.5f;
     const float cy = modelRect.Y + modelRect.Height * 0.51f;
     const float scale = std::min(modelRect.Width * 0.47f, modelRect.Height * 0.73f);
@@ -4682,13 +5003,11 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
                       cy - point.y * scale * perspective);
     };
 
-    if (buildMesh) {
-        drawDualSenseRasterMesh(graphics, modelRect, liveInput);
-        graphics.SetSmoothingMode(oldSmoothing);
-        return;
-    }
-    // The DualSense light bars are emissive and therefore are drawn as a
-    // separate layer. They follow the same yaw/pitch as the mesh.
+    // The supplied CAD asset has no dedicated LED material. Add thin emissive
+    // ribbons in model space instead of painting screen-space strokes over the
+    // controller. Their vertices now share the model's rotation, perspective
+    // and front-face visibility, so the light physically follows the touchpad
+    // seam and disappears when the controller is viewed from the rear.
     const std::uint32_t litRgb = gamepadLightingPreviewRgb(GetTickCount64());
     const Color lightColor(lightingReady ? 255 : 170,
                           static_cast<BYTE>((litRgb >> 16) & 0xff),
@@ -4701,50 +5020,108 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
         vertex.z = z + g_dualSenseMesh.centerZ;
         return project(rotateDualSensePoint(vertex));
     };
-    // The light bars follow the two long seams beside the touchpad. The old
-    // short segment floated in the lower half of the pad; these curved paths
-    // start at the upper seam and finish at its lower corner, so they stay
-    // aligned while the user rotates the model.
-    const PointF leftLightStart = modelPoint(-0.45f, 0.54f, 0.285f);
-    const PointF leftLightEnd = modelPoint(-0.31f, 0.17f, 0.315f);
-    const PointF rightLightStart = modelPoint(0.45f, 0.54f, 0.285f);
-    const PointF rightLightEnd = modelPoint(0.31f, 0.17f, 0.315f);
-    const PointF leftLightControl1 = modelPoint(-0.445f, 0.44f, 0.30f);
-    const PointF leftLightControl2 = modelPoint(-0.39f, 0.25f, 0.315f);
-    const PointF rightLightControl1 = modelPoint(0.445f, 0.44f, 0.30f);
-    const PointF rightLightControl2 = modelPoint(0.39f, 0.25f, 0.315f);
-    GraphicsPath leftLightPath;
-    leftLightPath.StartFigure();
-    leftLightPath.AddBezier(leftLightStart, leftLightControl1, leftLightControl2, leftLightEnd);
-    GraphicsPath rightLightPath;
-    rightLightPath.StartFigure();
-    rightLightPath.AddBezier(rightLightStart, rightLightControl1, rightLightControl2, rightLightEnd);
-    Pen lightGlow(Color(70, lightColor.GetR(), lightColor.GetG(), lightColor.GetB()), 9.0f);
-    Pen lightCore(lightColor, 2.6f);
-    lightGlow.SetStartCap(LineCapRound); lightGlow.SetEndCap(LineCapRound);
-    lightCore.SetStartCap(LineCapRound); lightCore.SetEndCap(LineCapRound);
-    graphics.DrawPath(&lightGlow, &leftLightPath);
-    graphics.DrawPath(&lightGlow, &rightLightPath);
-    graphics.DrawPath(&lightCore, &leftLightPath);
-    graphics.DrawPath(&lightCore, &rightLightPath);
+    struct EmissivePoint { float x, y, z; };
+    const DualSenseRenderPoint frontNormal = rotateDualSenseDirection(0.0f, 0.0f, 1.0f);
+    const float frontVisibility = std::clamp((frontNormal.z - 0.03f) / 0.94f, 0.0f, 1.0f);
+    auto curvePoint = [](bool left, float t) {
+        const float direction = left ? -1.0f : 1.0f;
+        const float inverse = 1.0f - t;
+        const float weights[] = {inverse * inverse * inverse, 3.0f * inverse * inverse * t,
+                                 3.0f * inverse * t * t, t * t * t};
+        // Follow the touchpad shell edge closely: the upper half needs to sit
+        // farther inward than the old screen-space decoration, while the
+        // lower endpoint already meets the real corner of the pad.
+        const float xs[] = {0.390f, 0.395f, 0.360f, 0.310f};
+        const float ys[] = {0.540f, 0.440f, 0.250f, 0.170f};
+        const float zs[] = {0.304f, 0.312f, 0.322f, 0.325f};
+        EmissivePoint point{};
+        for (int index = 0; index < 4; ++index) {
+            point.x += direction * xs[index] * weights[index];
+            point.y += ys[index] * weights[index];
+            point.z += zs[index] * weights[index];
+        }
+        return point;
+    };
+    auto drawRibbon = [&](bool left, float width, Color color) {
+        if (frontVisibility <= 0.01f || color.GetA() == 0) return;
+        constexpr int segments = 18;
+        std::array<PointF, (segments + 1) * 2> polygon{};
+        for (int index = 0; index <= segments; ++index) {
+            const float t = index / static_cast<float>(segments);
+            const EmissivePoint center = curvePoint(left, t);
+            const EmissivePoint before = curvePoint(left, std::max(0.0f, t - 0.01f));
+            const EmissivePoint after = curvePoint(left, std::min(1.0f, t + 0.01f));
+            const float tangentX = after.x - before.x;
+            const float tangentY = after.y - before.y;
+            const float length = std::max(0.00001f, std::sqrt(tangentX * tangentX + tangentY * tangentY));
+            const float normalX = -tangentY / length;
+            const float normalY = tangentX / length;
+            const float half = width * 0.5f;
+            polygon[index] = modelPoint(center.x + normalX * half, center.y + normalY * half, center.z);
+            polygon[polygon.size() - 1 - index] =
+                modelPoint(center.x - normalX * half, center.y - normalY * half, center.z);
+        }
+        GraphicsPath ribbon;
+        ribbon.AddPolygon(polygon.data(), static_cast<INT>(polygon.size()));
+        SolidBrush brush(Color(static_cast<BYTE>(std::lround(color.GetA() * frontVisibility)),
+                               color.GetR(), color.GetG(), color.GetB()));
+        graphics.FillPath(&brush, &ribbon);
+    };
 
-    // Five small player indicators sit immediately below the touchpad. They
-    // are part of the same 3D layer (rather than a fixed screen overlay), so
-    // they remain attached to the controller during rotation.
+    if (frontVisibility > 0.01f) {
+        const Color channel(215, 12, 15, 23);
+        if (lightingReady) {
+            const Color glow(68, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
+            drawRibbon(true, 0.044f, glow);
+            drawRibbon(false, 0.044f, glow);
+            drawRibbon(true, 0.030f, channel);
+            drawRibbon(false, 0.030f, channel);
+            drawRibbon(true, 0.010f, lightColor);
+            drawRibbon(false, 0.010f, lightColor);
+        } else {
+            drawRibbon(true, 0.030f, channel);
+            drawRibbon(false, 0.030f, channel);
+            const Color unlit(220, 52, 60, 77);
+            drawRibbon(true, 0.009f, unlit);
+            drawRibbon(false, 0.009f, unlit);
+        }
+    }
+
+    // The five player indicators are model-space discs rather than camera-
+    // facing ellipses. They foreshorten with the controller and keep their
+    // real white cores while the surrounding glow follows the active effect.
+    auto drawModelDisc = [&](float centerX, float centerY, float centerZ, float radius, Color color) {
+        if (frontVisibility <= 0.01f || color.GetA() == 0) return;
+        constexpr int points = 14;
+        std::array<PointF, points> polygon{};
+        constexpr float tau = 6.28318530717958647692f;
+        for (int index = 0; index < points; ++index) {
+            const float angle = tau * index / points;
+            polygon[index] = modelPoint(centerX + std::cos(angle) * radius,
+                                        centerY + std::sin(angle) * radius, centerZ);
+        }
+        SolidBrush brush(Color(static_cast<BYTE>(std::lround(color.GetA() * frontVisibility)),
+                               color.GetR(), color.GetG(), color.GetB()));
+        graphics.FillPolygon(&brush, polygon.data(), static_cast<INT>(polygon.size()));
+    };
     const bool playerLeds = g_dualSensePlayerLedsEnabled && lightingReady;
     const float playerLedX[] = {-0.14f, -0.07f, 0.0f, 0.07f, 0.14f};
     for (float ledX : playerLedX) {
-        const PointF led = modelPoint(ledX, 0.135f, 0.35f);
         if (playerLeds) {
-            SolidBrush glow(Color(58, lightColor.GetR(), lightColor.GetG(), lightColor.GetB()));
-            graphics.FillEllipse(&glow, RectF(led.X - 4.0f, led.Y - 4.0f, 8.0f, 8.0f));
+            drawModelDisc(ledX, 0.135f, 0.323f, 0.020f,
+                          Color(48, lightColor.GetR(), lightColor.GetG(), lightColor.GetB()));
         }
-        SolidBrush core(playerLeds ? lightColor : Color(190, 46, 53, 68));
-        graphics.FillEllipse(&core, RectF(led.X - 1.45f, led.Y - 1.45f, 2.9f, 2.9f));
+        // Recess the indicator into a dark model-space socket before drawing
+        // its small white emitter. This avoids the floating-dot appearance.
+        drawModelDisc(ledX, 0.135f, 0.324f, 0.011f, Color(240, 13, 16, 23));
+        drawModelDisc(ledX, 0.135f, 0.325f, 0.0058f,
+                      playerLeds ? Color(255, 238, 243, 255) : Color(220, 42, 48, 62));
     }
 
     // Sticks and buttons are deformed in the cached mesh itself. Nothing is
     // painted over the physical controls, so the supplied model stays intact.
+    g_gamepadYaw = savedOverlayYaw;
+    g_gamepadPitch = savedOverlayPitch;
     graphics.SetSmoothingMode(oldSmoothing);
 }
 
@@ -5213,6 +5590,30 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
                 7.2f, Color(255, 139, 149, 170));
 
     g_maxScroll = std::max(0.0f, compatibility.GetBottom() + g_scrollOffset + 18 - height);
+}
+
+void drawGamepadFastOverlay(Graphics& graphics, int width, int height) {
+    const float x = kSidebarWidth + 32.0f;
+    const float available = width - x - 32.0f;
+    const float originY = static_cast<float>(kHeaderHeight + 24) - g_scrollOffset;
+    const float liveCardY = originY + 78.0f + 94.0f;
+    const float contentX = x + 20.0f;
+    const float contentY = liveCardY + 62.0f;
+    const float contentWidth = available - 40.0f;
+    const float columnGap = 24.0f;
+    const float infoW = std::clamp(contentWidth * 0.34f, 230.0f, 330.0f);
+    const float modelWidth = std::max(330.0f, contentWidth - infoW - columnGap);
+    const RectF modelRect(contentX, contentY, modelWidth, 330.0f);
+    const ULONGLONG now = GetTickCount64();
+    const bool liveInput = g_dualSenseLive.seen && now - g_dualSenseLive.lastInputAt < 2500;
+    const bool lightingReady = dualSenseDeviceCount() > 0;
+    const GraphicsState state = graphics.Save();
+    graphics.SetClip(RectF(static_cast<REAL>(kSidebarWidth), static_cast<REAL>(kHeaderHeight),
+                           static_cast<REAL>(std::max(0, width - kSidebarWidth)),
+                           static_cast<REAL>(std::max(0, height - kHeaderHeight))), CombineModeReplace);
+    drawDualSenseModel(graphics, modelRect, liveInput, lightingReady);
+    graphics.Restore(state);
+    g_gamepadModelRect = modelRect;
 }
 
 void drawCompatibility(Graphics& graphics, int width, int height, float originY) {
@@ -7128,7 +7529,37 @@ void paint(HWND window) {
     int height = std::max(1L, client.bottom);
     Bitmap buffer(width, height, PixelFormat32bppPARGB);
     Graphics graphics(&buffer);
-    renderScene(graphics, width, height);
+    const ULONGLONG now = GetTickCount64();
+    const bool fastGamepadFrame = g_gamepadFastPaintRequested && g_page == Page::Gamepads &&
+                                  !g_colorPickerOpen && !launchAnimationActive() &&
+                                  g_gamepadPageCache && g_gamepadPageCache->GetLastStatus() == Ok &&
+                                  g_gamepadPageCacheWidth == width && g_gamepadPageCacheHeight == height &&
+                                  std::abs(g_gamepadPageCacheScroll - g_scrollOffset) < 0.01f &&
+                                  now - g_gamepadLastFullPaintAt < 120;
+    g_gamepadFastPaintRequested = false;
+    if (fastGamepadFrame) {
+        graphics.SetInterpolationMode(InterpolationModeNearestNeighbor);
+        graphics.DrawImage(g_gamepadPageCache.get(), 0, 0, width, height);
+        graphics.SetInterpolationMode(InterpolationModeBilinear);
+        graphics.SetSmoothingMode(SmoothingModeAntiAlias);
+        drawGamepadFastOverlay(graphics, width, height);
+    } else {
+        renderScene(graphics, width, height);
+        if (g_page == Page::Gamepads && !g_colorPickerOpen && !launchAnimationActive()) {
+            g_gamepadPageCache = std::make_unique<Bitmap>(width, height, PixelFormat32bppPARGB);
+            if (g_gamepadPageCache && g_gamepadPageCache->GetLastStatus() == Ok) {
+                Graphics pageGraphics(g_gamepadPageCache.get());
+                pageGraphics.SetCompositingMode(CompositingModeSourceCopy);
+                pageGraphics.DrawImage(&buffer, 0, 0, width, height);
+                g_gamepadPageCacheWidth = width;
+                g_gamepadPageCacheHeight = height;
+                g_gamepadPageCacheScroll = g_scrollOffset;
+                g_gamepadLastFullPaintAt = now;
+            } else {
+                g_gamepadPageCache.reset();
+            }
+        }
+    }
     Graphics screen(target);
     screen.DrawImage(&buffer, 0, 0);
     EndPaint(window, &paint);
@@ -7249,6 +7680,30 @@ int runRenderBenchmark(const fs::path& destination) {
     const double effectsMs = measure([&] { renderScene(graphics, width, height); });
     g_page = Page::Gamepads;
     const double gamepadsMs = measure([&] { renderScene(graphics, width, height); });
+    g_dualSenseLive = {};
+    g_dualSenseLive.seen = true;
+    g_dualSenseLive.lastInputAt = GetTickCount64();
+    g_dualSenseVisualAxes.initialized = true;
+    int motionFrame = 0;
+    const double gamepadsMotionMs = measure([&] {
+        const float phase = static_cast<float>(motionFrame++) / frames * 6.28318530718f;
+        g_dualSenseVisualAxes.leftX = std::sin(phase) * 0.92f;
+        g_dualSenseVisualAxes.leftY = std::cos(phase) * 0.92f;
+        g_dualSenseVisualAxes.rightX = std::sin(phase + 1.2f) * 0.78f;
+        g_dualSenseVisualAxes.rightY = std::cos(phase + 1.2f) * 0.78f;
+        renderScene(graphics, width, height);
+    });
+    motionFrame = 0;
+    const double gamepadsFastMotionMs = measure([&] {
+        const float phase = static_cast<float>(motionFrame++) / frames * 6.28318530718f;
+        g_dualSenseVisualAxes.leftX = std::sin(phase) * 0.92f;
+        g_dualSenseVisualAxes.leftY = std::cos(phase) * 0.92f;
+        g_dualSenseVisualAxes.rightX = std::sin(phase + 1.2f) * 0.78f;
+        g_dualSenseVisualAxes.rightY = std::cos(phase + 1.2f) * 0.78f;
+        drawGamepadFastOverlay(graphics, width, height);
+    });
+    g_dualSenseLive = {};
+    g_dualSenseVisualAxes = {};
     g_page = Page::Dashboard;
     g_launchPreviewMs = 820.0;
     const double launchBuildMs = measure([&] { renderScene(graphics, width, height); });
@@ -7258,6 +7713,8 @@ int runRenderBenchmark(const fs::path& destination) {
     g_launchAnimationFinished = true;
     const double effectsAverageMs = effectsMs / frames;
     const double gamepadsAverageMs = gamepadsMs / frames;
+    const double gamepadsMotionAverageMs = gamepadsMotionMs / frames;
+    const double gamepadsFastMotionAverageMs = gamepadsFastMotionMs / frames;
     const double launchBuildAverageMs = launchBuildMs / frames;
     const double launchLogoAverageMs = launchLogoMs / frames;
     std::ofstream report(destination, std::ios::trunc);
@@ -7275,11 +7732,17 @@ int runRenderBenchmark(const fs::path& destination) {
            << "effects_estimated_fps=" << (effectsAverageMs > 0.0 ? 1000.0 / effectsAverageMs : 0.0) << "\n"
            << "gamepads_average_ms=" << gamepadsAverageMs << "\n"
            << "gamepads_estimated_fps=" << (gamepadsAverageMs > 0.0 ? 1000.0 / gamepadsAverageMs : 0.0) << "\n"
+           << "gamepads_motion_average_ms=" << gamepadsMotionAverageMs << "\n"
+           << "gamepads_motion_estimated_fps=" << (gamepadsMotionAverageMs > 0.0 ? 1000.0 / gamepadsMotionAverageMs : 0.0) << "\n"
+           << "gamepads_fast_motion_average_ms=" << gamepadsFastMotionAverageMs << "\n"
+           << "gamepads_fast_motion_estimated_fps=" << (gamepadsFastMotionAverageMs > 0.0 ? 1000.0 / gamepadsFastMotionAverageMs : 0.0) << "\n"
            << "launch_build_average_ms=" << launchBuildAverageMs << "\n"
            << "launch_build_estimated_fps=" << (launchBuildAverageMs > 0.0 ? 1000.0 / launchBuildAverageMs : 0.0) << "\n"
            << "launch_logo_average_ms=" << launchLogoAverageMs << "\n"
            << "launch_logo_estimated_fps=" << (launchLogoAverageMs > 0.0 ? 1000.0 / launchLogoAverageMs : 0.0) << "\n";
     return averageMs <= 33.34 && effectsAverageMs <= 33.34 && gamepadsAverageMs <= 33.34 &&
+           gamepadsMotionAverageMs <= 33.34 &&
+           gamepadsFastMotionAverageMs <= 16.67 &&
            launchBuildAverageMs <= 33.34 && launchLogoAverageMs <= 33.34 ? 0 : 25;
 }
 
@@ -7473,6 +7936,22 @@ int runSelfTests(const fs::path& destination) {
                                   parsedBluetoothPadded) && parsedBluetoothPadded.bluetooth &&
         parsedBluetoothPadded.buttons[1] && parsedBluetoothPadded.buttons[4] && parsedBluetoothPadded.buttons[5] &&
         parsedBluetoothPadded.leftTrigger == 71 && parsedBluetoothPadded.rightTrigger == 189;
+    std::set<std::uint32_t> dualSenseComponentIds;
+    bool dualSenseComponentsReady = g_dualSenseMesh.loaded;
+    for (std::uint32_t component : g_dualSenseControlComponents) {
+        dualSenseComponentsReady = dualSenseComponentsReady && component != UINT32_MAX;
+        if (component != UINT32_MAX) dualSenseComponentIds.insert(component);
+    }
+    for (std::uint32_t component : g_dualSenseDpadComponents) {
+        dualSenseComponentsReady = dualSenseComponentsReady && component != UINT32_MAX;
+        if (component != UINT32_MAX) dualSenseComponentIds.insert(component);
+    }
+    // Every visible input must own a different connected part.  This catches
+    // the regression where L1/R1, Create/Options or a face button accidentally
+    // selected the shell and made another region move.
+    dualSenseComponentsReady = dualSenseComponentsReady &&
+                               dualSenseComponentIds.size() ==
+                                   g_dualSenseControlComponents.size() + g_dualSenseDpadComponents.size();
     const std::uint32_t savedBaseColor = g_baseColor;
     const int savedBrightness = g_brightness;
     const bool savedEffectActive = g_effectActive.load();
@@ -7497,7 +7976,7 @@ int runSelfTests(const fs::path& destination) {
            gradientSpeedMapping && gradientStaysSaturated && gradientHasNoSeam && controllerTransportProfiles &&
            colorOrderPermutations && dualSenseUsbInput && dualSenseBluetoothInput && dualSenseBluetoothEnhancedInput &&
            dualSenseBluetoothBodyInput && dualSenseBluetoothEnhancedBodyInput && dualSenseBluetoothPaddedInput &&
-           gamepadAnimatedLightingPreview && certificationIdentity ? 0 : 21;
+           dualSenseComponentsReady && gamepadAnimatedLightingPreview && certificationIdentity ? 0 : 21;
 }
 
 int createInterfaceCaptures(const fs::path& destination) {
@@ -7543,6 +8022,25 @@ int createInterfaceCaptures(const fs::path& destination) {
     updateDualSenseVisualAxes(GetTickCount64(), true);
     ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads.png") && ok;
     ok = savePageCapture(Page::Gamepads, 1020, 680, destination / L"gamepads-small.png") && ok;
+    const float captureYaw = g_gamepadYaw;
+    const float capturePitch = g_gamepadPitch;
+    g_gamepadYaw = 0.72f;
+    g_gamepadPitch = 0.18f;
+    g_dualSenseModelCache.reset();
+    g_dualSenseControlCache.reset();
+    g_dualSenseMovingControlCache.reset();
+    ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads-angled.png") && ok;
+    g_gamepadYaw = 3.14159f;
+    g_gamepadPitch = 0.12f;
+    g_dualSenseModelCache.reset();
+    g_dualSenseControlCache.reset();
+    g_dualSenseMovingControlCache.reset();
+    ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads-rear.png") && ok;
+    g_gamepadYaw = captureYaw;
+    g_gamepadPitch = capturePitch;
+    g_dualSenseModelCache.reset();
+    g_dualSenseControlCache.reset();
+    g_dualSenseMovingControlCache.reset();
     rgbToHsv(g_baseColor, g_pickerHue, g_pickerSaturation, g_pickerBrightness);
     g_colorPickerOpen = true;
     ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads-color-picker.png") && ok;
@@ -8336,6 +8834,7 @@ void handleDualSenseRawInput(HRAWINPUT input) {
         const ULONGLONG now = GetTickCount64();
         if (now - g_lastGamepadFrameAt >= 16) {
             g_lastGamepadFrameAt = now;
+            g_gamepadFastPaintRequested = true;
             InvalidateRect(g_window, nullptr, FALSE);
         }
     }
@@ -8439,6 +8938,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     (((g_gamepadDragging || gamepadAxesAnimating) && now - g_lastGamepadFrameAt >= 16) ||
                      (gamepadLightingAnimating && now - g_lastGamepadFrameAt >= 33));
                 if (gamepadAnimating) g_lastGamepadFrameAt = now;
+                if (gamepadAnimating) g_gamepadFastPaintRequested = true;
                 if (liveUiAnimating || headerAnimating || splashAnimating || ambientAnimating || gamepadAnimating) {
                     InvalidateRect(window, nullptr, FALSE);
                 }
@@ -8882,6 +9382,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         }
         LocalFree(arguments);
         g_dualSenseModelCache.reset();
+        g_dualSenseControlCache.reset();
+        g_dualSenseMovingControlCache.reset();
+        g_gamepadPageCache.reset();
         g_dualSensePreview.reset();
         g_dualSenseImage.reset();
         g_logo.reset();
@@ -8897,6 +9400,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
                         capture.sample(frame, 68, 70, true, screenError) && frame.valid;
         LocalFree(arguments);
         g_dualSenseModelCache.reset();
+        g_dualSenseControlCache.reset();
+        g_dualSenseMovingControlCache.reset();
+        g_gamepadPageCache.reset();
         g_dualSensePreview.reset();
         g_dualSenseImage.reset();
         g_logo.reset();
@@ -8908,6 +9414,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         const int result = runRenderBenchmark(arguments[2]);
         LocalFree(arguments);
         g_dualSenseModelCache.reset();
+        g_dualSenseControlCache.reset();
+        g_dualSenseMovingControlCache.reset();
+        g_gamepadPageCache.reset();
         g_dualSensePreview.reset();
         g_dualSenseImage.reset();
         g_logo.reset();
@@ -8923,6 +9432,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         int result = createInterfaceCaptures(arguments[2]);
         LocalFree(arguments);
         g_dualSenseModelCache.reset();
+        g_dualSenseControlCache.reset();
+        g_dualSenseMovingControlCache.reset();
+        g_gamepadPageCache.reset();
         g_dualSensePreview.reset();
         g_dualSenseImage.reset();
         g_logo.reset();
@@ -8934,6 +9446,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         int result = runSelfTests(arguments[2]);
         LocalFree(arguments);
         g_dualSenseModelCache.reset();
+        g_dualSenseControlCache.reset();
+        g_dualSenseMovingControlCache.reset();
+        g_gamepadPageCache.reset();
         g_dualSensePreview.reset();
         g_dualSenseImage.reset();
         g_logo.reset();
@@ -9012,6 +9527,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
         DispatchMessageW(&message);
     }
     g_dualSenseModelCache.reset();
+    g_dualSenseControlCache.reset();
+    g_dualSenseMovingControlCache.reset();
+    g_gamepadPageCache.reset();
     g_dualSensePreview.reset();
     g_dualSenseImage.reset();
     g_logo.reset();

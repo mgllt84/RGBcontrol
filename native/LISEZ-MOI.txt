@@ -1,4 +1,4 @@
-RGBCcontrol 0.16.9 — application native C++ pour Windows
+RGBCcontrol 0.16.11 — application native C++ pour Windows
 =====================================================
 
 Installation
@@ -116,6 +116,17 @@ pressions fantômes multiples, les sticks instables et les mauvaises gâchettes
 sont ainsi supprimés à la source. La manette 3D affiche maintenant aussi en
 temps réel la couleur produite par l'effet actif (dégradé, arc-en-ciel,
 respiration, musique, Ambilight, etc.) et rafraîchit ses bandes LED à 30 Hz.
+
+La version 0.16.10 remplace les traits lumineux superposés par des rubans
+émissifs intégrés aux coordonnées du modèle 3D. Les bandes suivent désormais
+la rotation, la perspective et les coutures du pavé tactile, puis disparaissent
+naturellement lorsqu'on regarde l'arrière. Leur couleur reste synchronisée en
+temps réel avec la couleur fixe, la luminosité et tous les effets animés.
+
+La version 0.16.11 resserre les zones d'interaction aux capuchons physiques :
+un bouton pressé ne déforme plus la coque voisine, les sticks restent fluides
+et les gâchettes ont leur propre course. Le rendu de l'aperçu reprend désormais
+exactement les mêmes courbes de couleur que le pilote DualSense.
 
 Le choix « Manette Xbox 360 » lance un pont XInput autonome basé sur HIDMaestro
 (mode utilisateur, sans ViGEmBus). Il crée une manette virtuelle uniquement

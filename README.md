@@ -2,7 +2,7 @@
 
 Application Windows de contrôle RGB, de gestion des effets lumineux et de surveillance matérielle.
 
-Version actuelle : **0.16.11**.
+Version actuelle : **0.16.12**.
 
 - Contrôle RGB individuel et effets animés via OpenRGB et les plugins RGBCcontrol.
 - Détection matérielle, surveillance et profils de ventilation.

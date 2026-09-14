@@ -1,0 +1,31 @@
+RGBCcontrol — composants tiers
+================================
+
+OpenRGB 1.0rc3
+---------------
+Projet officiel : https://gitlab.com/CalcProgrammer1/OpenRGB
+Code source correspondant :
+https://gitlab.com/CalcProgrammer1/OpenRGB/-/tree/release_candidate_1.0rc3
+
+OpenRGB est distribué sous GNU General Public License version 2 ou ultérieure.
+Le texte complet est fourni dans OpenRGB-LICENSE.txt.
+
+LibreHardwareMonitor 0.9.6
+--------------------------
+Projet officiel : https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+Code source correspondant :
+https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/tree/v0.9.6
+
+LibreHardwareMonitor est distribué sous Mozilla Public License 2.0. Son texte
+de licence et les avis de ses dépendances sont également présents dans le
+dossier HardwareMonitor de l’application.
+
+Références du protocole Sony DualSense
+--------------------------------------
+Le pilote DualSense de RGBCcontrol a été implémenté à partir des descriptions
+publiques des rapports HID maintenues par SDL et par le pilote hid-playstation
+du noyau Linux. Aucun code binaire de Sony, de SDL ou du noyau Linux n'est
+inclus dans ce pilote.
+
+SDL : https://github.com/libsdl-org/SDL
+Linux hid-playstation : https://github.com/torvalds/linux/blob/master/drivers/hid/hid-playstation.c

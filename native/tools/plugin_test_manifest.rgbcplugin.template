@@ -1,0 +1,18 @@
+[RGBCPlugin]
+Api=2
+Enabled=1
+Id=org.rgbccontrol.protocol-test
+Name=RGBCcontrol protocol test
+Publisher=RGBCcontrol
+Transport=process-test
+Executable=sample-plugin.exe
+Sha256=__SAMPLE_SHA256__
+Vid=0xfffe
+Pid=0xfffd
+DeviceName=Protocol test
+DeviceType=Virtual
+Capabilities=lighting,effects,zones,perled
+Modes=Static,Gradient
+Zones=2
+Leds=12
+TimeoutMs=1500

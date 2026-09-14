@@ -1,0 +1,18 @@
+[RGBCPlugin]
+Api=2
+Enabled=0
+Id=org.rgbccontrol.example
+Name=Pilote d'exemple désactivé
+Publisher=RGBCcontrol
+Transport=hid
+Executable=example-driver.exe
+Sha256=0000000000000000000000000000000000000000000000000000000000000000
+Vid=0x1234
+Pid=0x5678
+DeviceName=Appareil RGB d'exemple
+DeviceType=Périphérique RGB
+Capabilities=lighting,effects,zones,perled
+Modes=Static,Breathing,Rainbow,Wave,Gradient
+Zones=1
+Leds=60
+TimeoutMs=5000

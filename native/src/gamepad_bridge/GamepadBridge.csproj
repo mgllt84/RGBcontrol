@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PublishSingleFile>false</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <AssemblyName>RGBCcontrol.GamepadBridge</AssemblyName>
+    <RootNamespace>RGBCcontrol.GamepadBridge</RootNamespace>
+    <HidMaestroCorePath Condition="'$(HidMaestroCorePath)' == ''">$(MSBuildThisFileDirectory)..\..\..\work\HIDMaestro-v1.7.3\HIDMaestro.Core.dll</HidMaestroCorePath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="HIDMaestro.Core">
+      <HintPath>$(HidMaestroCorePath)</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

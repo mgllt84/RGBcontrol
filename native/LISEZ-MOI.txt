@@ -1,0 +1,350 @@
+RGBCcontrol 0.16.9 — application native C++ pour Windows
+=====================================================
+
+Installation
+------------
+Lancez RGBCcontrol-Setup.exe. L’installation se fait dans le profil Windows de
+l’utilisateur et crée des raccourcis sur le Bureau et dans le menu Démarrer.
+La désinstallation est disponible dans les Paramètres Windows et dans le menu
+Démarrer.
+
+Cette première version n’est pas encore signée par un certificat commercial.
+Windows SmartScreen peut donc demander une confirmation lors du premier
+lancement de l’installateur.
+
+Interface 0.15
+--------------
+La version 0.15.0 modernise entièrement la couche visuelle native : nouvelle
+typographie Windows, surfaces en verre sombre, boutons animés, navigation plus
+lisible et fond RGB lentement animé. Au lancement, le logo se construit par
+segments avant de révéler progressivement le tableau de bord. Un clic, Espace,
+Entrée ou Échap permet de passer cette introduction ; l'option « Réduire les
+animations » la désactive automatiquement.
+
+La version 0.15.1 optimise ce rendu pour conserver une interface réactive : le
+fond complexe est mis en cache, les calculs visuels sont espacés et les
+transitions de l'interface utilisent un minuteur à 60 images par seconde.
+
+La version 0.15.2 remplace l'ancien visuel carré de l'introduction par un
+emblème vectoriel rond construit par des faisceaux RGB, puis révélé comme une
+signature lumineuse. Les commandes de la page Effets utilisent désormais une
+action unique et courte : « Appliquer ».
+
+La version 0.15.3 rétablit le logo original au centre de cette introduction.
+Il est recadré en cercle depuis l'image haute définition et rendu en bicubique
+avec suréchantillonnage, sans les coins noirs ni l'aspect flou de la vignette.
+
+La version 0.15.4 précalcule ce logo haute définition avant l'ouverture de la
+fenêtre afin d'éviter un ralentissement au milieu de l'animation. L'interface
+ne se redessine plus inutilement à 60 FPS pendant un effet RGB ; les aperçus et
+le fond restent fluides à 30 FPS en laissant davantage de temps aux interactions.
+
+La version 0.15.5 corrige le débordement des textes pendant le défilement : le
+contenu est maintenant rendu et cliqué uniquement dans la zone située sous
+l'en-tête fixe. Les éléments sortis de l'écran ne restent plus visibles en haut.
+
+La version 0.16.0 utilise le canal officiel GitHub du projet. Un clic sur
+« Mettre à jour » recherche la dernière Release, télécharge et vérifie son
+installateur, effectue la mise à niveau sans fenêtre puis relance l'application.
+
+La version 0.16.1 ajoute un pilote local pour les manettes Sony DualSense et
+DualSense Edge. La manette apparaît uniquement lorsqu'une interface HID
+authentique Sony est branchée en USB ou connectée en Bluetooth. RGBCcontrol
+peut modifier la barre lumineuse RGB autour du pavé tactile et l'état des cinq
+témoins de joueur sans envoyer de commande aux vibrations, au son ou aux
+gâchettes adaptatives. Si Steam, DS4Windows ou un jeu verrouille la manette, le
+pilote refuse le contrôle au lieu d'afficher une fausse réussite.
+
+Un nouvel onglet Manette affiche en direct les boutons, la croix directionnelle,
+les joysticks et l'enfoncement des gâchettes grâce à l'entrée brute Windows, en
+lecture seule. Il permet de choisir la couleur de la barre lumineuse et
+d'activer ou désactiver séparément les cinq témoins blancs sous le pavé tactile.
+
+La version 0.16.2 affiche une DualSense réaliste en haute définition. Les bandes
+lumineuses autour du pavé tactile et les cinq témoins sont superposés à l'image
+et suivent la couleur active en direct. Un cache pré-calculé conserve une
+animation fluide (environ 57 FPS mesurés sur la page Manette).
+
+La version 0.16.3 remplace cette image par le modèle DualSense fourni en 3D.
+Glissez la souris sur la manette pour voir ses côtés et son arrière, ou
+double-cliquez pour revenir à la vue de face. Les deux sticks virtuels suivent
+les axes de la manette en direct ; les boutons restent ceux du modèle.
+
+La version 0.16.4 corrige le rendu granuleux du modèle 3D avec une profondeur
+par pixel et des textures filtrées. La coque est désormais opaque et aucun
+maillage n'apparaît à l'écran. Les joysticks bougent directement sur le modèle
+et les boutons s'enfoncent et s'assombrissent lorsqu'ils sont pressés, sans
+ajouter de formes par-dessus la manette.
+
+La version 0.16.5 reconstruit le rendu de la DualSense à partir de la géométrie
+et des véritables cartes de matière du modèle fourni : couleur, relief,
+rugosité et métal. La coque, le pavé tactile, les sticks et les boutons ont
+maintenant un volume et des reflets cohérents. Les symboles triangle, cercle,
+croix et carré sont intégrés à la surface 3D et suivent donc la rotation de la
+manette. Une pression déplace et assombrit réellement la pièce concernée. Ce
+rendu reste mis en cache et dépasse 60 images par seconde sur la page Manette.
+
+La version 0.16.6 réaligne la prévisualisation 3D et les informations dans deux
+colonnes régulières. Les joysticks suivent désormais une zone morte circulaire
+et une interpolation temporelle à 60 Hz pour supprimer les déplacements par
+paliers. La roue des couleurs est vraiment modale : elle reçoit tous les clics
+sans faire tourner la manette située derrière. Enfin, le pilote DualSense prend
+en charge les effets animés dans un processus isolé et arrête proprement
+l'animation lorsqu'une autre couleur ou un autre effet est appliqué.
+
+La version 0.16.7 corrige la lecture des rapports HID DualSense USB, Bluetooth
+compact (y compris lorsqu'il est rempli à 64 octets) et Bluetooth étendu 0x31.
+Les axes, les gâchettes analogiques et les boutons utilisent maintenant leurs
+octets réels. Le compteur de séquence Bluetooth est ignoré afin qu'il ne soit
+plus interprété comme un joystick en mouvement. Les coordonnées du modèle 3D
+sont alignées sur la
+géométrie fournie. Les bandes latérales et les cinq témoins de joueur sont
+attachés au modèle et suivent sa rotation. Le rendu est suréchantillonné à
+l'arrêt puis repasse en résolution native pendant une rotation pour garder une
+image nette sans ralentir le geste. Les gâchettes se déplacent aussi avec leur
+pression analogique.
+
+La version 0.16.8 corrige le décalage propre au rapport Bluetooth étendu 0x31 :
+l'octet de séquence n'est plus interprété comme l'axe gauche. Elle supprime le
+mouvement fantôme au branchement, rétablit les deux sticks et les quatre
+gâchettes, limite l'écoute Raw Input aux manettes pour éviter de saturer
+l'interface, et recentre les commandes et symboles sur le modèle 3D.
+
+La version 0.16.9 corrige le rapport USB officiel de 64 octets : son compteur
+de séquence ne peut plus être confondu avec le format Bluetooth compact. Les
+pressions fantômes multiples, les sticks instables et les mauvaises gâchettes
+sont ainsi supprimés à la source. La manette 3D affiche maintenant aussi en
+temps réel la couleur produite par l'effet actif (dégradé, arc-en-ciel,
+respiration, musique, Ambilight, etc.) et rafraîchit ses bandes LED à 30 Hz.
+
+Le choix « Manette Xbox 360 » lance un pont XInput autonome basé sur HIDMaestro
+(mode utilisateur, sans ViGEmBus). Il crée une manette virtuelle uniquement
+après le clic de l'utilisateur et demande l'élévation Windows lors de la
+première installation. Le mode « DualSense native » arrête proprement ce pont.
+
+RGB
+---
+RGBCcontrol détecte automatiquement les contrôleurs compatibles avec OpenRGB.
+Chaque appareil peut être inclus ou exclu séparément. Les couleurs fixes, la
+luminosité et treize effets logiciels, dont un dégradé animé sans coupure, sont gérés directement par l’application
+C++ au moyen du protocole SDK local d’OpenRGB.
+
+Depuis la version 0.11.2, chaque contrôleur est traité séparément selon les
+modes qu'il annonce réellement. Le mode matériel Static est utilisé en
+priorité pour une couleur fixe ; le mode Direct et l'envoi à chaque LED ne
+servent que pour les appareils qui ne proposent pas Static. L'échec d'un
+périphérique ne peut donc plus éteindre tous les autres contrôleurs inclus.
+Pour les effets, les appareils sans Direct utilisent leur effet matériel le
+plus proche quand il existe.
+
+Depuis la version 0.11.3, les cartes mères à plusieurs sorties reçoivent aussi
+une trame distincte pour chaque zone OpenRGB. Le rapport de diagnostic détaille
+les modes et la taille de chaque zone pour repérer les connecteurs ARGB qui
+doivent encore recevoir un nombre de LED.
+
+Depuis la version 0.11.4, les sorties ARGB redimensionnables détectées avec zéro
+LED sont initialisées automatiquement à 120 LED, dans la limite annoncée par le
+contrôleur, avant toute couleur ou animation. SignalRGB est aussi détecté comme
+conflit d'écriture : RGBCcontrol demande alors de le quitter au lieu d'annoncer
+à tort que la commande a réussi. L'assistant distingue désormais « détecté »
+de « contrôle RGB confirmé ».
+
+La version 0.14.0 corrige le dégradé fluide : une seule connexion OpenRGB est
+maintenue pendant l'animation, ce qui supprime les reconnexions entre les
+images. La phase est désormais intégrée dans le temps ; modifier la vitesse ne
+provoque donc plus de saut brutal de couleur. Après une interruption du moteur,
+la connexion est recréée automatiquement à l'image suivante. La palette reste
+fortement saturée afin que les contrôleurs à faible précision ne transforment
+plus les couleurs intermédiaires en alternance blanche et bleue.
+
+Le transport des animations est aussi choisi par famille de contrôleur. Les
+cartes ASRock Polychrome reçoivent une trame complète atomique afin d'éviter
+l'affichage successif d'états partiels ; les contrôleurs qui exigent des
+sorties indépendantes, notamment certaines cartes ASUS, conservent l'envoi par
+zone.
+
+Le Ducky One 2 Mini DKON1861ST n'est affiché que lorsque son identifiant USB
+précis VID_0416/PID_0123 est présent. Il conserve son firmware officiel V1.22 et son RGB
+local contrôlé au clavier. RGBCcontrol n’écrit aucun firmware et ne tente pas
+d’envoyer de protocole HID expérimental au clavier.
+
+Le mode Musique n'est plus une animation simulée : il analyse en temps réel la
+sortie audio de Windows avec WASAPI, sans utiliser le microphone. Les basses,
+les médiums et les aigus sont séparés, affichés par trois vumètres et envoyés
+aux appareils OpenRGB sélectionnés. La sensibilité et la luminosité restent
+réglables. Le Ducky demeure en mode compagnon local pour préserver son
+fonctionnement et son firmware officiel.
+
+Le mode Ambilight analyse l'écran Windows sélectionné à faible résolution afin
+de limiter l'utilisation du processeur. Les couleurs des bords gauche, haut,
+droit et bas sont mélangées progressivement sur les LED OpenRGB. La réactivité,
+la saturation, la luminosité, l'écran et le mode quatre zones restent
+modifiables depuis la page Effets.
+
+L'Assistant de compatibilité effectue un contrôle en lecture seule d'OpenRGB,
+de la sortie audio Windows, de la capture d'écran et du pont matériel. Il
+n'envoie aucune couleur, aucune consigne de ventilation et aucune commande HID.
+
+Huit couleurs d'accent sont disponibles pour l'interface : violet, bleu, cyan,
+rose, rouge, orange, vert et blanc. Le choix est mémorisé automatiquement.
+
+Partage
+-------
+Le dossier « Package-a-partager » contient l'installateur versionné, ce guide
+et son empreinte SHA-256. L'archive ZIP voisine peut être envoyée directement à
+un autre utilisateur Windows. L'application n'étant pas encore signée par un
+certificat commercial, SmartScreen peut afficher un avertissement au premier
+lancement.
+
+L’Assistant Ducky, accessible depuis la fiche du clavier dans la page
+Appareils, guide l’utilisateur avec les raccourcis officiels Fn + Alt. Il
+propose un style et une couleur cible puis applique l’effet visuel équivalent
+aux autres contrôleurs OpenRGB inclus. Le clavier n’est jamais ouvert en HID :
+la manipulation reste entièrement locale et ne peut pas reproduire le blocage
+provoqué par une commande USB expérimentale.
+
+Le tutoriel n’affiche qu’une action à la fois sous forme de grandes touches
+visuelles. L’utilisateur confirme ce qu’il voit avant de continuer. Pour une
+couleur personnalisée, l’assistant convertit automatiquement la teinte choisie
+vers les dix niveaux rouge, vert et bleu du firmware Ducky et indique combien
+de pressions effectuer sur Z, X et C.
+
+La calibration commence par l'extinction complète du rétroéclairage. Pour les
+modes animés, l'assistant affiche ensuite un aperçu de la cible et accompagne
+chaque passage au mode suivant. Comme le firmware ne publie pas son état RGB à
+Windows, la confirmation reste visuelle et explicite : l'application n'affiche
+« mode confirmé » qu'après validation de l'utilisateur.
+
+Centre Appareils et détection instantanée
+-----------------------------------------
+La page Appareils rassemble les contrôleurs RGB, le Ducky, les ventilateurs et
+les capteurs. Elle indique pour chacun le fournisseur utilisé, les zones, le
+nombre de LED et si le contrôle est complet, local ou limité à la lecture.
+
+Windows signale directement à RGBCcontrol l’arrivée et le retrait des
+périphériques. Les événements rapprochés sont regroupés pendant 750 ms, puis une
+analyse complète actualise automatiquement l’inventaire. L’analyse périodique
+configurable reste active comme solution de secours.
+
+Le moteur utilise une API de fournisseurs versionnée et des capacités séparées
+pour la découverte, le RGB, les effets, les zones, les capteurs et les
+ventilateurs. Cette base permet d’intégrer de nouvelles marques sans activer des
+écritures non prises en charge.
+
+Depuis la version 0.12.0, les pilotes RGBCcontrol externes sont fonctionnels.
+Chaque pilote est un processus séparé associé à un VID/PID exact. Son exécutable
+doit correspondre à l'empreinte SHA-256 du manifeste et réussir une commande de
+test avant que l'appareil soit affiché comme pilotable. Les couleurs fixes et
+les effets matériels passent automatiquement par le plugin ; OpenRGB reste le
+fournisseur de repli. De nouveaux pilotes peuvent être ajoutés dans le dossier
+Plugins sans recompiler l'application. Le contrat complet est fourni dans
+PLUGIN-SDK.md.
+
+Ventilation
+-----------
+Les capteurs CPU, carte mère, GPU, alimentation et contrôleurs compatibles sont
+inventoriés automatiquement. Les canaux disponibles apparaissent séparément.
+Une modification de vitesse nécessite toujours une action explicite. Le pont
+matériel reste ouvert pendant l’utilisation afin que la consigne ne soit pas
+annulée entre deux analyses.
+
+Le contrôle demande le mode avancé (autorisation administrateur). Si
+l’application est en accès standard, un clic sur Appliquer demande directement
+cette autorisation. Le minimum logiciel est de 30 % pour un ventilateur et de 50 % pour un canal
+identifié comme pompe. Tout canal modifié par RGBCcontrol est rendu au mode
+automatique à la fermeture normale de l’application. Le bouton Mode avancé
+permet de redémarrer avec les droits administrateur afin d’exposer davantage de
+capteurs de carte mère lorsque le matériel le permet.
+
+La courbe intelligente utilise la température la plus haute entre le CPU et le
+GPU. Quatre points réglables et trois réponses prédéfinies permettent d'adapter
+progressivement la vitesse. Les minima de sécurité restent toujours appliqués.
+
+Profils et sauvegardes
+----------------------
+Trois emplacements enregistrent la couleur, la luminosité, l'effet, ses
+réglages, les contrôleurs RGB inclus, le profil de ventilation, la courbe et
+les consignes individuelles des ventilateurs. Les profils sont conservés dans
+le profil Windows de l'utilisateur.
+
+La page Profils permet aussi d'exporter la configuration actuelle dans un
+fichier .rgbcprofile et de la restaurer sur ce PC ou un autre. Les appareils
+sont rapprochés par leur fabricant et leur nom ; les réglages incompatibles
+sont simplement ignorés.
+
+Diagnostic
+----------
+La page Diagnostic indique séparément les contrôleurs RGB, le Ducky, les
+ventilateurs, leur capacité de contrôle et le moteur utilisé. Un rapport texte
+peut être copié dans le presse-papiers pour faciliter le dépannage.
+
+Validation matérielle locale
+-----------------------------
+L'assistant de compatibilité distingue désormais la détection d'un appareil de
+son fonctionnement réel. Pour valider un contrôleur, l'utilisateur lance son
+test individuel puis confirme visuellement le rouge, le vert et le bleu.
+L'assistant essaie jusqu'à six ordres de canaux et les transports par appareil
+ou par zone. Il termine par une animation de stabilité à 25, 40, 70 ou 100 ms
+et conserve la cadence la plus rapide confirmée sans clignotement. La mention
+« certifié sur ce PC » n'apparaît qu'après la validation complète.
+
+Le résultat est lié à l'empreinte exacte du contrôleur et conservé dans le
+profil Windows. Un appareil remplacé ou présenté différemment par son pilote
+redevient automatiquement « test requis ». Le rapport de diagnostic exporte le
+résultat PASSED, FAILED ou UNTESTED pour chaque contrôleur, avec le transport,
+l'ordre RGB, la cadence et la longueur ARGB préparée. Les principaux moteurs
+RGB concurrents sont signalés avant tout essai et ne sont jamais arrêtés sans
+l'accord de l'utilisateur.
+
+Intégration Windows et planification
+--------------------------------------
+RGBCcontrol ajoute une icône dans la zone de notification. Son menu permet de
+rouvrir la fenêtre, d'appliquer rapidement un profil enregistré ou de quitter
+complètement l'application. Le bouton Réduire peut masquer la fenêtre dans
+cette zone ; le bouton Fermer conserve son comportement de fermeture complète.
+
+Le démarrage avec Windows est optionnel et utilise le profil de l'utilisateur.
+Lorsqu'il est actif, RGBCcontrol démarre discrètement dans la zone de
+notification. La planification jour/nuit applique deux profils enregistrés aux
+heures choisies selon l'heure locale. Une exécution planifiée ne provoque jamais
+spontanément de fenêtre d'autorisation administrateur : sans accès avancé, le
+RGB est appliqué et la partie ventilation est laissée inchangée.
+
+Langues et mises à jour
+-----------------------
+La page Paramètres permet de choisir le français, l’anglais, l’allemand ou le
+chinois simplifié. Le choix est mémorisé dans le profil Windows de l’utilisateur.
+
+Le bouton « Mettre à jour » réalise désormais tout le parcours en une action :
+il recherche la version, télécharge l'installateur, vérifie son SHA-256, ferme
+proprement l'ancienne application, installe silencieusement la nouvelle puis la
+relance. Le module attend l’adresse HTTPS d’un manifeste dans le fichier
+update-channel.ini. Le manifeste doit contenir une section [RGBCcontrol] avec
+les clés version, installer_url et sha256. Une nouvelle version n’est proposée
+qu’après vérification de l’empreinte SHA-256 de l’installateur téléchargé.
+
+Personnalisation et performances
+--------------------------------
+La page Paramètres propose huit couleurs d’accent, une détection matérielle
+toutes les 5, 15, 30 ou 60 secondes et trois niveaux de fluidité pour les effets
+RGB. Le mode Éco réduit l’activité du processeur tandis que le mode Ultra fluide
+augmente la fréquence des images envoyées aux contrôleurs compatibles.
+
+Le démarrage discret, la réduction dans la zone de notification, la fermeture
+dans cette zone, la mémorisation de la dernière page et la réduction des
+animations de l’interface sont configurables séparément. La réinitialisation
+des préférences ne supprime jamais les profils RGB ni les courbes de ventilation.
+
+Limites matérielles
+-------------------
+Un ventilateur branché uniquement en Molex ou SATA, sans retour tachymétrique ni
+contrôleur logiciel, ne peut pas être identifié individuellement par Windows.
+La compatibilité RGB dépend des contrôleurs pris en charge par OpenRGB ou par
+un plugin RGBCcontrol installé et validé. Le moteur rend l'ajout de marques
+possible, mais un pilote décrivant le protocole réel reste nécessaire pour
+chaque famille matérielle.
+
+Sécurité électrique
+--------------------
+Ne branchez jamais une prise ARGB 3 broches 5 V sur un connecteur RGB 4 broches
+12 V.

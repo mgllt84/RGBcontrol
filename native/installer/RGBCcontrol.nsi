@@ -1,11 +1,14 @@
 Unicode True
-SetCompressor /SOLID lzma
-SetCompressorDictSize 64
+; A solid LZMA self-extractor has repeatedly triggered Defender's generic
+; Wacatac machine-learning rule.  The payload is already made of compressed
+; assets, so use the standard zlib stream: it remains reasonably small while
+; producing a conventional installer layout that security scanners can inspect.
+SetCompressor zlib
 
 !include "MUI2.nsh"
 
 !define APP_NAME "RGBCcontrol"
-!define APP_VERSION "0.16.14"
+!define APP_VERSION "0.16.15"
 !define APP_PUBLISHER "RGBCcontrol"
 !define APP_EXE "RGBCcontrol.exe"
 
@@ -35,28 +38,13 @@ UninstallIcon "..\resources\RGBCcontrol.ico"
 
 !insertmacro MUI_LANGUAGE "French"
 
-Function StopRunningComponents
-  ; OpenRGB and the helper bridges are children of RGBCcontrol.  A silent
-  ; update can otherwise reach the copy phase while one of their DLLs is
-  ; still closing, which leaves OpenRGB.exe locked by Windows.
-  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /T /IM OpenRGB.exe'
-  Pop $0
-  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /T /IM RGBCcontrol.HardwareBridge.exe'
-  Pop $0
-  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /T /IM RGBCcontrol.DualSense.exe'
-  Pop $0
-  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /T /IM RGBCcontrol.GamepadBridge.exe'
-  Pop $0
-  Sleep 2000
-FunctionEnd
-
 Section "RGBCcontrol" SEC_MAIN
-  Call StopRunningComponents
   IfSilent silent_update_wait normal_install
 silent_update_wait:
-  ; The running application closes immediately after spawning this updater.
-  ; Waiting here prevents Windows from locking the executable being replaced.
-  Sleep 1800
+  ; RGBCcontrol closes its own OpenRGB and helper child processes during
+  ; shutdown.  Wait for that graceful cleanup instead of shipping process-
+  ; killing commands inside the installer (a common antivirus heuristic).
+  Sleep 2600
 normal_install:
   SetOutPath "$INSTDIR"
   File /r /x "update-channel.ini" "..\dist\*.*"

@@ -16,11 +16,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "RGBCcontrol"
       VALUE "FileDescription", "RGBCcontrol - RGB et ventilation"
-            VALUE "FileVersion", "0.16.14"
+            VALUE "FileVersion", "0.16.15"
       VALUE "InternalName", "RGBCcontrol"
       VALUE "OriginalFilename", "RGBCcontrol.exe"
       VALUE "ProductName", "RGBCcontrol"
-            VALUE "ProductVersion", "0.16.14"
+            VALUE "ProductVersion", "0.16.15"
     END
   END
   BLOCK "VarFileInfo"

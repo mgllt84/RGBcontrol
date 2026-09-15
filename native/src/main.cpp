@@ -56,7 +56,7 @@ constexpr UINT TRAY_PROFILE_FIRST = 4110;
 constexpr UINT TRAY_EXIT = 4199;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.13";
+constexpr wchar_t kAppVersion[] = L"0.16.14";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -340,6 +340,7 @@ struct DualSenseVisualAxes {
 };
 DualSenseVisualAxes g_dualSenseVisualAxes;
 bool g_dualSensePlayerLedsEnabled = true;
+bool g_captureSuppressDualSenseLightOverlays = false;
 bool g_gamepadRawInputReady = false;
 ULONGLONG g_lastGamepadFrameAt = 0;
 enum class XboxBridgeStatus { Off, Starting, Ready, Error };
@@ -5152,22 +5153,22 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
         graphics.FillPath(&brush, &ribbon);
     };
 
-    if (frontVisibility > 0.01f) {
+    if (frontVisibility > 0.01f && !g_captureSuppressDualSenseLightOverlays) {
         const Color channel(215, 12, 15, 23);
         if (lightingReady) {
             const Color glow(68, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
-            drawRibbon(true, 0.044f, glow);
-            drawRibbon(false, 0.044f, glow);
-            drawRibbon(true, 0.030f, channel);
-            drawRibbon(false, 0.030f, channel);
-            drawRibbon(true, 0.010f, lightColor);
-            drawRibbon(false, 0.010f, lightColor);
+            drawRibbon(true, 0.030f, glow);
+            drawRibbon(false, 0.030f, glow);
+            drawRibbon(true, 0.021f, channel);
+            drawRibbon(false, 0.021f, channel);
+            drawRibbon(true, 0.009f, lightColor);
+            drawRibbon(false, 0.009f, lightColor);
         } else {
-            drawRibbon(true, 0.030f, channel);
-            drawRibbon(false, 0.030f, channel);
+            drawRibbon(true, 0.021f, channel);
+            drawRibbon(false, 0.021f, channel);
             const Color unlit(220, 52, 60, 77);
-            drawRibbon(true, 0.009f, unlit);
-            drawRibbon(false, 0.009f, unlit);
+            drawRibbon(true, 0.008f, unlit);
+            drawRibbon(false, 0.008f, unlit);
         }
     }
 
@@ -5191,16 +5192,17 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
     const bool playerLeds = g_dualSensePlayerLedsEnabled && lightingReady;
     // Match the compact five-hole row below the touchpad instead of spanning
     // across the speaker grille.
-    const float playerLedX[] = {-0.105f, -0.0525f, 0.0f, 0.0525f, 0.105f};
+    const float playerLedX[] = {-0.0715f, -0.03575f, 0.0f, 0.03575f, 0.0715f};
     for (float ledX : playerLedX) {
+        if (g_captureSuppressDualSenseLightOverlays) break;
         if (playerLeds) {
-            drawModelDisc(ledX, 0.151f, 0.326f, 0.017f,
+            drawModelDisc(ledX, 0.158f, 0.326f, 0.012f,
                           Color(48, lightColor.GetR(), lightColor.GetG(), lightColor.GetB()));
         }
         // Recess the indicator into a dark model-space socket before drawing
         // its small white emitter. This avoids the floating-dot appearance.
-        drawModelDisc(ledX, 0.151f, 0.327f, 0.0090f, Color(240, 13, 16, 23));
-        drawModelDisc(ledX, 0.151f, 0.328f, 0.0048f,
+        drawModelDisc(ledX, 0.158f, 0.327f, 0.0090f, Color(240, 13, 16, 23));
+        drawModelDisc(ledX, 0.158f, 0.328f, 0.0048f,
                       playerLeds ? Color(255, 238, 243, 255) : Color(220, 42, 48, 62));
     }
 
@@ -8078,7 +8080,9 @@ int runSelfTests(const fs::path& destination) {
             const bool shoulder = std::abs(std::abs(centerX) - 0.61) < 0.24 && centerY > 0.42;
             const bool dpad = centerX < -0.42 && centerX > -0.82 && centerY > 0.12 && centerY < 0.46;
             const bool touchpad = component == g_dualSenseControlComponents[13];
-            if (!shoulder && !dpad && !touchpad) continue;
+            const bool touchpadSeam = std::abs(centerX) > 0.24 && std::abs(centerX) < 0.48 &&
+                                      centerY > 0.14 && centerY < 0.58 && stats.maxZ > 0.25f;
+            if (!shoulder && !dpad && !touchpad && !touchpadSeam) continue;
             std::string bindings;
             for (std::size_t index = 0; index < g_dualSenseControlComponents.size(); ++index) {
                 if (g_dualSenseControlComponents[index] == component) bindings += " C" + std::to_string(index);
@@ -8198,6 +8202,9 @@ int createInterfaceCaptures(const fs::path& destination) {
     g_dualSenseLive.buttons[13] = true;
     updateDualSenseVisualAxes(GetTickCount64(), true);
     ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads.png") && ok;
+    g_captureSuppressDualSenseLightOverlays = true;
+    ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads-model-geometry.png") && ok;
+    g_captureSuppressDualSenseLightOverlays = false;
     ok = savePageCapture(Page::Gamepads, 1020, 680, destination / L"gamepads-small.png") && ok;
     const float captureYaw = g_gamepadYaw;
     const float capturePitch = g_gamepadPitch;

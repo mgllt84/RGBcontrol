@@ -5,7 +5,7 @@ SetCompressorDictSize 64
 !include "MUI2.nsh"
 
 !define APP_NAME "RGBCcontrol"
-!define APP_VERSION "0.16.12"
+!define APP_VERSION "0.16.13"
 !define APP_PUBLISHER "RGBCcontrol"
 !define APP_EXE "RGBCcontrol.exe"
 

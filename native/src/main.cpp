@@ -56,7 +56,7 @@ constexpr UINT TRAY_PROFILE_FIRST = 4110;
 constexpr UINT TRAY_EXIT = 4199;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.12";
+constexpr wchar_t kAppVersion[] = L"0.16.13";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -240,6 +240,15 @@ struct DualSenseTexture {
     bool loaded = false;
 };
 DualSenseMesh g_dualSenseMesh;
+struct DualSenseLightAnchor { float x = 0.0f, y = 0.0f, z = 0.0f; };
+std::array<DualSenseLightAnchor, 6> g_dualSenseTouchpadLeftEdge{{
+    {-0.36f, 0.55f, 0.31f}, {-0.39f, 0.48f, 0.315f}, {-0.395f, 0.40f, 0.32f},
+    {-0.375f, 0.32f, 0.324f}, {-0.34f, 0.24f, 0.327f}, {-0.30f, 0.19f, 0.329f}
+}};
+std::array<DualSenseLightAnchor, 6> g_dualSenseTouchpadRightEdge{{
+    {0.36f, 0.55f, 0.31f}, {0.39f, 0.48f, 0.315f}, {0.395f, 0.40f, 0.32f},
+    {0.375f, 0.32f, 0.324f}, {0.34f, 0.24f, 0.327f}, {0.30f, 0.19f, 0.329f}
+}};
 std::array<std::uint32_t, 15> g_dualSenseControlComponents{};
 std::array<std::uint32_t, 4> g_dualSenseDpadComponents{};
 std::array<std::vector<std::uint32_t>, 15> g_dualSenseControlComponentGroups;
@@ -831,17 +840,80 @@ bool loadDualSenseMesh(const fs::path& path) {
     g_dualSenseDpadComponents[2] = nearestControlComponent(-0.626f, 0.179f, 0.085f, 0.275f);
     g_dualSenseDpadComponents[3] = nearestControlComponent(-0.721f, 0.280f, 0.085f, 0.275f);
 
-    // The selected component is the complete visible cap in this CAD export.
-    // Keeping one rigid component per input avoids moving stacked decorative
-    // layers twice and keeps the live pass small enough for real-time input.
+    // Start with the main cap selected above, then attach only the small
+    // stacked layers that physically belong to it. The CAD export separates
+    // these layers even though they are one moving control on the real pad.
     for (std::size_t index = 0; index < g_dualSenseControlComponents.size(); ++index) {
         if (g_dualSenseControlComponents[index] != UINT32_MAX) {
             g_dualSenseControlComponentGroups[index] = {g_dualSenseControlComponents[index]};
         }
     }
+
+    struct ComponentGroupStats {
+        int count = 0;
+        double sumX = 0.0, sumY = 0.0;
+        float highestZ = -std::numeric_limits<float>::infinity();
+    };
+    std::unordered_map<std::uint32_t, ComponentGroupStats> groupStats;
+    for (const DualSenseMeshVertex& vertex : g_dualSenseMesh.vertices) {
+        ComponentGroupStats& stats = groupStats[vertex.component];
+        ++stats.count;
+        stats.sumX += vertex.x;
+        stats.sumY += vertex.y;
+        stats.highestZ = std::max(stats.highestZ, vertex.z);
+    }
+    auto addCenteredLayers = [&](std::vector<std::uint32_t>& group, float x, float y, float radius,
+                                 float minimumHighestZ, float maximumHighestZ) {
+        for (const auto& [component, stats] : groupStats) {
+            if (stats.count <= 0 || stats.highestZ < minimumHighestZ || stats.highestZ > maximumHighestZ) continue;
+            const float centerX = static_cast<float>(stats.sumX / stats.count);
+            const float centerY = static_cast<float>(stats.sumY / stats.count);
+            const float dx = centerX - x;
+            const float dy = centerY - y;
+            if (dx * dx + dy * dy <= radius * radius) group.push_back(component);
+        }
+        std::sort(group.begin(), group.end());
+        group.erase(std::unique(group.begin(), group.end()), group.end());
+    };
+
+    // L2/R2 contain a deep shell plus a thin upper lip. Move both together,
+    // while leaving the independent L1/R1 bumper in place.
+    addCenteredLayers(g_dualSenseControlComponentGroups[6], -0.615f, 0.594f, 0.020f, -0.25f, 0.025f);
+    addCenteredLayers(g_dualSenseControlComponentGroups[6], -0.619f, 0.533f, 0.018f, -0.01f, 0.025f);
+    addCenteredLayers(g_dualSenseControlComponentGroups[7], 0.615f, 0.594f, 0.020f, -0.25f, 0.025f);
+    addCenteredLayers(g_dualSenseControlComponentGroups[7], 0.619f, 0.533f, 0.018f, -0.01f, 0.025f);
+
+    const float dpadX[] = {-0.620f, -0.529f, -0.626f, -0.721f};
+    const float dpadY[] = {0.374f, 0.274f, 0.179f, 0.280f};
     for (std::size_t index = 0; index < g_dualSenseDpadComponents.size(); ++index) {
         if (g_dualSenseDpadComponents[index] != UINT32_MAX) {
             g_dualSenseDpadComponentGroups[index] = {g_dualSenseDpadComponents[index]};
+            // Every direction has several coincident material shells. Moving
+            // the complete stack makes the east/right arrow visibly depress.
+            addCenteredLayers(g_dualSenseDpadComponentGroups[index], dpadX[index], dpadY[index],
+                              0.014f, 0.24f, 0.34f);
+        }
+    }
+
+    // Measure the light path from the actual touchpad boundary. This keeps the
+    // emissive ribbons on the seam at every scale instead of relying on hand-
+    // tuned screen coordinates.
+    const float edgeSamples[] = {0.55f, 0.48f, 0.40f, 0.32f, 0.24f, 0.19f};
+    const std::uint32_t touchpadComponent = g_dualSenseControlComponents[13];
+    for (std::size_t sample = 0; sample < std::size(edgeSamples); ++sample) {
+        const float targetY = edgeSamples[sample];
+        const DualSenseMeshVertex* leftEdge = nullptr;
+        const DualSenseMeshVertex* rightEdge = nullptr;
+        for (const DualSenseMeshVertex& vertex : g_dualSenseMesh.vertices) {
+            if (vertex.component != touchpadComponent || std::abs(vertex.y - targetY) > 0.018f || vertex.z < 0.20f) continue;
+            if (!leftEdge || vertex.x < leftEdge->x) leftEdge = &vertex;
+            if (!rightEdge || vertex.x > rightEdge->x) rightEdge = &vertex;
+        }
+        if (leftEdge && rightEdge) {
+            constexpr float inset = 0.004f;
+            constexpr float lift = 0.004f;
+            g_dualSenseTouchpadLeftEdge[sample] = {leftEdge->x + inset, targetY, leftEdge->z + lift};
+            g_dualSenseTouchpadRightEdge[sample] = {rightEdge->x - inset, targetY, rightEdge->z + lift};
         }
     }
     for (const auto& components : g_dualSenseControlComponentGroups) {
@@ -4580,10 +4652,11 @@ DualSenseMeshVertex animateDualSenseVertex(const DualSenseMeshVertex& source, bo
     facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[5], 0.624f, 0.599f, 0.18f, 0.04f, -1.0f, g_dualSenseControlComponentGroups[5]));
 
     const DualSenseDpadDirections directions = dualSenseDpadDirections(g_dualSenseLive.dpad);
-    facePress = std::max(facePress, activeInfluence(directions.up, -0.620f, 0.374f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[0]));
-    facePress = std::max(facePress, activeInfluence(directions.right, -0.529f, 0.274f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[1]));
-    facePress = std::max(facePress, activeInfluence(directions.down, -0.626f, 0.179f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[2]));
-    facePress = std::max(facePress, activeInfluence(directions.left, -0.721f, 0.280f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[3]));
+    float dpadPress = 0.0f;
+    dpadPress = std::max(dpadPress, activeInfluence(directions.up, -0.620f, 0.374f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[0]));
+    dpadPress = std::max(dpadPress, activeInfluence(directions.right, -0.529f, 0.274f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[1]));
+    dpadPress = std::max(dpadPress, activeInfluence(directions.down, -0.626f, 0.179f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[2]));
+    dpadPress = std::max(dpadPress, activeInfluence(directions.left, -0.721f, 0.280f, 0.070f, 0.275f, -0.35f, g_dualSenseDpadComponentGroups[3]));
     facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[8], -0.467f, 0.496f, 0.060f, 0.245f, -0.35f, g_dualSenseControlComponentGroups[8]));
     facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[9], 0.467f, 0.496f, 0.060f, 0.245f, -0.35f, g_dualSenseControlComponentGroups[9]));
     facePress = std::max(facePress, activeInfluence(g_dualSenseLive.buttons[12], 0.0f, -0.10f, 0.060f, 0.18f, -0.35f, g_dualSenseControlComponentGroups[12]));
@@ -4597,6 +4670,10 @@ DualSenseMeshVertex animateDualSenseVertex(const DualSenseMeshVertex& source, bo
     // prevents the shell behind a cap from winning the depth test and removes
     // the grey ``cut-out'' artefact seen on the touchpad.
     vertex.z -= facePress * 0.008f;
+    // The directional pad has a deeper mechanical travel than the face keys.
+    // Its complete material stack moves rigidly, so the press is visible
+    // without stretching the surrounding shell.
+    vertex.z -= dpadPress * 0.016f;
     // The touchpad moves as one rigid plate, along the same depth axis as the
     // real click mechanism.
     vertex.z -= touchpadPress * 0.0050f;
@@ -5034,27 +5111,20 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
         vertex.z = z + g_dualSenseMesh.centerZ;
         return project(rotateDualSensePoint(vertex));
     };
-    struct EmissivePoint { float x, y, z; };
     const DualSenseRenderPoint frontNormal = rotateDualSenseDirection(0.0f, 0.0f, 1.0f);
     const float frontVisibility = std::clamp((frontNormal.z - 0.03f) / 0.94f, 0.0f, 1.0f);
-    auto curvePoint = [](bool left, float t) {
-        const float direction = left ? -1.0f : 1.0f;
-        const float inverse = 1.0f - t;
-        const float weights[] = {inverse * inverse * inverse, 3.0f * inverse * inverse * t,
-                                 3.0f * inverse * t * t, t * t * t};
-        // These control points sit directly in the touchpad seam. The previous
-        // curve was a few millimetres outside the plate and appeared detached
-        // when viewed from the front or at an angle.
-        const float xs[] = {0.372f, 0.378f, 0.345f, 0.296f};
-        const float ys[] = {0.535f, 0.438f, 0.252f, 0.174f};
-        const float zs[] = {0.307f, 0.315f, 0.325f, 0.328f};
-        EmissivePoint point{};
-        for (int index = 0; index < 4; ++index) {
-            point.x += direction * xs[index] * weights[index];
-            point.y += ys[index] * weights[index];
-            point.z += zs[index] * weights[index];
-        }
-        return point;
+    const float touchpadLightDepthOffset = liveInput && g_dualSenseLive.buttons[13] ? -0.0050f : 0.0f;
+    auto curvePoint = [&](bool left, float t) {
+        const auto& anchors = left ? g_dualSenseTouchpadLeftEdge : g_dualSenseTouchpadRightEdge;
+        const float scaled = std::clamp(t, 0.0f, 1.0f) * static_cast<float>(anchors.size() - 1);
+        const std::size_t first = std::min<std::size_t>(static_cast<std::size_t>(scaled), anchors.size() - 2);
+        const std::size_t second = first + 1;
+        const float amount = scaled - static_cast<float>(first);
+        return DualSenseLightAnchor{
+            anchors[first].x + (anchors[second].x - anchors[first].x) * amount,
+            anchors[first].y + (anchors[second].y - anchors[first].y) * amount,
+            anchors[first].z + (anchors[second].z - anchors[first].z) * amount + touchpadLightDepthOffset
+        };
     };
     auto drawRibbon = [&](bool left, float width, Color color) {
         if (frontVisibility <= 0.01f || color.GetA() == 0) return;
@@ -5062,9 +5132,9 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
         std::array<PointF, (segments + 1) * 2> polygon{};
         for (int index = 0; index <= segments; ++index) {
             const float t = index / static_cast<float>(segments);
-            const EmissivePoint center = curvePoint(left, t);
-            const EmissivePoint before = curvePoint(left, std::max(0.0f, t - 0.01f));
-            const EmissivePoint after = curvePoint(left, std::min(1.0f, t + 0.01f));
+            const DualSenseLightAnchor center = curvePoint(left, t);
+            const DualSenseLightAnchor before = curvePoint(left, std::max(0.0f, t - 0.01f));
+            const DualSenseLightAnchor after = curvePoint(left, std::min(1.0f, t + 0.01f));
             const float tangentX = after.x - before.x;
             const float tangentY = after.y - before.y;
             const float length = std::max(0.00001f, std::sqrt(tangentX * tangentX + tangentY * tangentY));
@@ -7976,6 +8046,53 @@ int runSelfTests(const fs::path& destination) {
     dualSenseComponentsReady = dualSenseComponentsReady &&
                                dualSenseComponentIds.size() ==
                                    g_dualSenseControlComponents.size() + g_dualSenseDpadComponents.size();
+    // Keep a compact topology report beside the self-test output. It makes
+    // layered trigger caps and button pieces diagnosable without modifying or
+    // probing the user's HID device.
+    struct ComponentTestStats {
+        int count = 0;
+        double sumX = 0.0, sumY = 0.0, sumZ = 0.0;
+        float minX = std::numeric_limits<float>::infinity();
+        float maxX = -std::numeric_limits<float>::infinity();
+        float minY = std::numeric_limits<float>::infinity();
+        float maxY = -std::numeric_limits<float>::infinity();
+        float minZ = std::numeric_limits<float>::infinity();
+        float maxZ = -std::numeric_limits<float>::infinity();
+    };
+    std::unordered_map<std::uint32_t, ComponentTestStats> componentTestStats;
+    for (const DualSenseMeshVertex& vertex : g_dualSenseMesh.vertices) {
+        ComponentTestStats& stats = componentTestStats[vertex.component];
+        ++stats.count;
+        stats.sumX += vertex.x; stats.sumY += vertex.y; stats.sumZ += vertex.z;
+        stats.minX = std::min(stats.minX, vertex.x); stats.maxX = std::max(stats.maxX, vertex.x);
+        stats.minY = std::min(stats.minY, vertex.y); stats.maxY = std::max(stats.maxY, vertex.y);
+        stats.minZ = std::min(stats.minZ, vertex.z); stats.maxZ = std::max(stats.maxZ, vertex.z);
+    }
+    std::ofstream topology(destination / L"dualsense-topology.tsv", std::ios::trunc);
+    if (topology) {
+        topology << "component\tcount\tcx\tcy\tcz\tminx\tmaxx\tminy\tmaxy\tminz\tmaxz\tbindings\n";
+        for (const auto& [component, stats] : componentTestStats) {
+            if (stats.count <= 0) continue;
+            const double centerX = stats.sumX / stats.count;
+            const double centerY = stats.sumY / stats.count;
+            const bool shoulder = std::abs(std::abs(centerX) - 0.61) < 0.24 && centerY > 0.42;
+            const bool dpad = centerX < -0.42 && centerX > -0.82 && centerY > 0.12 && centerY < 0.46;
+            const bool touchpad = component == g_dualSenseControlComponents[13];
+            if (!shoulder && !dpad && !touchpad) continue;
+            std::string bindings;
+            for (std::size_t index = 0; index < g_dualSenseControlComponents.size(); ++index) {
+                if (g_dualSenseControlComponents[index] == component) bindings += " C" + std::to_string(index);
+            }
+            for (std::size_t index = 0; index < g_dualSenseDpadComponents.size(); ++index) {
+                if (g_dualSenseDpadComponents[index] == component) bindings += " D" + std::to_string(index);
+            }
+            topology << component << '\t' << stats.count << '\t' << centerX << '\t'
+                     << centerY << '\t' << stats.sumZ / stats.count << '\t'
+                     << stats.minX << '\t' << stats.maxX << '\t' << stats.minY << '\t'
+                     << stats.maxY << '\t' << stats.minZ << '\t' << stats.maxZ << '\t'
+                     << bindings << '\n';
+        }
+    }
     const DualSenseLiveState savedDualSenseLive = g_dualSenseLive;
     g_dualSenseLive = {};
     g_dualSenseLive.seen = true;
@@ -7995,6 +8112,21 @@ int runSelfTests(const fs::path& destination) {
                                     (rightDpadMask & (1u << 17)) == 0 &&
                                     (rightDpadMask & (1u << 18)) == 0 &&
                                     rightDpadPress && rightDpadMoves;
+    const bool layeredDualSenseControls = g_dualSenseControlComponentGroups[6].size() >= 3 &&
+                                          g_dualSenseControlComponentGroups[7].size() >= 3 &&
+                                          std::all_of(g_dualSenseDpadComponentGroups.begin(),
+                                                      g_dualSenseDpadComponentGroups.end(),
+                                                      [](const auto& group) { return group.size() >= 6; });
+    const bool measuredTouchpadLights = std::all_of(g_dualSenseTouchpadLeftEdge.begin(),
+                                                    g_dualSenseTouchpadLeftEdge.end(),
+                                                    [](const DualSenseLightAnchor& point) {
+                                                        return point.x < -0.20f && point.z > 0.20f;
+                                                    }) &&
+                                        std::all_of(g_dualSenseTouchpadRightEdge.begin(),
+                                                    g_dualSenseTouchpadRightEdge.end(),
+                                                    [](const DualSenseLightAnchor& point) {
+                                                        return point.x > 0.20f && point.z > 0.20f;
+                                                    });
     g_dualSenseLive = savedDualSenseLive;
     const std::uint32_t savedBaseColor = g_baseColor;
     const int savedBrightness = g_brightness;
@@ -8020,7 +8152,8 @@ int runSelfTests(const fs::path& destination) {
            gradientSpeedMapping && gradientStaysSaturated && gradientHasNoSeam && controllerTransportProfiles &&
            colorOrderPermutations && dualSenseUsbInput && dualSenseBluetoothInput && dualSenseBluetoothEnhancedInput &&
            dualSenseBluetoothBodyInput && dualSenseBluetoothEnhancedBodyInput && dualSenseBluetoothPaddedInput &&
-           dualSenseComponentsReady && dualSenseDpadRight && gamepadAnimatedLightingPreview && certificationIdentity ? 0 : 21;
+           dualSenseComponentsReady && dualSenseDpadRight && layeredDualSenseControls && measuredTouchpadLights &&
+           gamepadAnimatedLightingPreview && certificationIdentity ? 0 : 21;
 }
 
 int createInterfaceCaptures(const fs::path& destination) {
@@ -8058,7 +8191,7 @@ int createInterfaceCaptures(const fs::path& destination) {
     g_dualSenseLive.rightY = 107;
     g_dualSenseLive.leftTrigger = 84;
     g_dualSenseLive.rightTrigger = 201;
-    g_dualSenseLive.dpad = 1;
+    g_dualSenseLive.dpad = 2; // Capture the repaired physical right arrow by itself.
     g_dualSenseLive.buttons[1] = true;
     g_dualSenseLive.buttons[4] = true;
     g_dualSenseLive.buttons[7] = true;

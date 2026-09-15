@@ -1,4 +1,4 @@
-RGBCcontrol 0.16.12 — application native C++ pour Windows
+RGBCcontrol 0.16.13 — application native C++ pour Windows
 =====================================================
 
 Installation
@@ -132,6 +132,10 @@ La version 0.16.12 corrige l'association physique L1/L2 et R1/R2, rétablit la
 flèche droite de la croix directionnelle dans l'animation et le panneau des
 touches actives, puis réaligne les rubans lumineux et les cinq voyants sur le
 modèle 3D.
+
+La version 0.16.13 anime toutes les couches du capuchon L2/R2 et de la croix
+directionnelle afin qu'aucune encoche ne reste suspendue. Les rubans lumineux
+sont désormais calculés depuis les véritables bords du pavé tactile du modèle.
 
 Le choix « Manette Xbox 360 » lance un pont XInput autonome basé sur HIDMaestro
 (mode utilisateur, sans ViGEmBus). Il crée une manette virtuelle uniquement

@@ -1,4 +1,4 @@
-RGBCcontrol 0.16.17 — application native C++ pour Windows
+RGBCcontrol 0.16.18 — application native C++ pour Windows
 =====================================================
 
 Installation
@@ -154,6 +154,10 @@ restent attachés au modèle 3D pendant les rotations.
 La version 0.16.17 sépare correctement les sources lumineuses : seules les
 bandes latérales utilisent la couleur RGB. Les petits indicateurs sous le pavé
 restent blanc froid et suivent uniquement le réglage « Voyants du bas ».
+
+La version 0.16.18 retire les cinq points blancs ajoutés à l'aperçu. Les deux
+bandes blanches sont remontées contre le bord du pavé tactile et prolongées sur
+toute sa largeur, avec une séparation discrète au centre.
 
 Le choix « Manette Xbox 360 » lance un pont XInput autonome basé sur HIDMaestro
 (mode utilisateur, sans ViGEmBus). Il crée une manette virtuelle uniquement

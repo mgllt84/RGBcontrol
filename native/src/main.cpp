@@ -56,7 +56,7 @@ constexpr UINT TRAY_PROFILE_FIRST = 4110;
 constexpr UINT TRAY_EXIT = 4199;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.17";
+constexpr wchar_t kAppVersion[] = L"0.16.18";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -5153,16 +5153,15 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
         graphics.FillPath(&brush, &ribbon);
     };
 
-    // A real DualSense also lets the lightbar peek through two short windows
-    // below the centre of the touchpad. Keep them in model space as well: the
-    // highlights stay glued to the lower seam while the controller rotates or
-    // the touchpad is clicked, instead of looking like floating UI dots.
+    // Keep the two white lower strips in model space. They sit directly under
+    // the touchpad edge, span its width and follow every camera rotation or
+    // touchpad click instead of looking like floating UI elements.
     auto drawLowerLightWindow = [&](float centerX, float halfLength, float radius, Color color) {
         if (frontVisibility <= 0.01f || color.GetA() == 0) return;
         constexpr int capSegments = 8;
         std::array<PointF, capSegments * 2 + 2> polygon{};
         constexpr float pi = 3.14159265358979323846f;
-        const float centerY = 0.184f;
+        const float centerY = 0.208f;
         const float centerZ = 0.333f + touchpadLightDepthOffset;
         int point = 0;
         for (int index = 0; index <= capSegments; ++index) {
@@ -5209,49 +5208,15 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
         if (lowerIndicatorsOn) {
             const Color whiteGlow(62, 194, 214, 255);
             const Color whiteEmitter(255, 239, 245, 255);
-            drawLowerLightWindow(-0.086f, 0.018f, 0.010f, whiteGlow);
-            drawLowerLightWindow(0.086f, 0.018f, 0.010f, whiteGlow);
-            drawLowerLightWindow(-0.086f, 0.012f, 0.0042f, whiteEmitter);
-            drawLowerLightWindow(0.086f, 0.012f, 0.0042f, whiteEmitter);
+            drawLowerLightWindow(-0.153f, 0.128f, 0.012f, whiteGlow);
+            drawLowerLightWindow(0.153f, 0.128f, 0.012f, whiteGlow);
+            drawLowerLightWindow(-0.153f, 0.126f, 0.0050f, whiteEmitter);
+            drawLowerLightWindow(0.153f, 0.126f, 0.0050f, whiteEmitter);
         } else {
             const Color unlitIndicator(220, 44, 50, 64);
-            drawLowerLightWindow(-0.086f, 0.012f, 0.0042f, unlitIndicator);
-            drawLowerLightWindow(0.086f, 0.012f, 0.0042f, unlitIndicator);
+            drawLowerLightWindow(-0.153f, 0.126f, 0.0050f, unlitIndicator);
+            drawLowerLightWindow(0.153f, 0.126f, 0.0050f, unlitIndicator);
         }
-    }
-
-    // The five player indicators are model-space discs rather than camera-
-    // facing ellipses. They foreshorten with the controller and keep their
-    // real white cores while the surrounding glow follows the active effect.
-    auto drawModelDisc = [&](float centerX, float centerY, float centerZ, float radius, Color color) {
-        if (frontVisibility <= 0.01f || color.GetA() == 0) return;
-        constexpr int points = 14;
-        std::array<PointF, points> polygon{};
-        constexpr float tau = 6.28318530717958647692f;
-        for (int index = 0; index < points; ++index) {
-            const float angle = tau * index / points;
-            polygon[index] = modelPoint(centerX + std::cos(angle) * radius,
-                                        centerY + std::sin(angle) * radius, centerZ);
-        }
-        SolidBrush brush(Color(static_cast<BYTE>(std::lround(color.GetA() * frontVisibility)),
-                               color.GetR(), color.GetG(), color.GetB()));
-        graphics.FillPolygon(&brush, polygon.data(), static_cast<INT>(polygon.size()));
-    };
-    const bool playerLeds = g_dualSensePlayerLedsEnabled && lightingReady;
-    // Match the compact five-hole row below the touchpad instead of spanning
-    // across the speaker grille.
-    const float playerLedX[] = {-0.0715f, -0.03575f, 0.0f, 0.03575f, 0.0715f};
-    for (float ledX : playerLedX) {
-        if (g_captureSuppressDualSenseLightOverlays) break;
-        if (playerLeds) {
-            drawModelDisc(ledX, 0.158f, 0.326f, 0.012f,
-                          Color(48, lightColor.GetR(), lightColor.GetG(), lightColor.GetB()));
-        }
-        // Recess the indicator into a dark model-space socket before drawing
-        // its small white emitter. This avoids the floating-dot appearance.
-        drawModelDisc(ledX, 0.158f, 0.327f, 0.0090f, Color(240, 13, 16, 23));
-        drawModelDisc(ledX, 0.158f, 0.328f, 0.0048f,
-                      playerLeds ? Color(255, 238, 243, 255) : Color(220, 42, 48, 62));
     }
 
     // Sticks and buttons are deformed in the cached mesh itself. Nothing is
@@ -5629,10 +5594,10 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
     strokeRound(graphics, lighting, 19, Color(255, 43, 49, 65));
     text(graphics, localized(L"Éclairage DualSense", L"DualSense lighting", L"DualSense-Beleuchtung", L"DualSense 灯光"),
          RectF(lighting.X + 20, lighting.Y + 16, 260, 22), 14, Color::White, FontStyleBold);
-    text(graphics, localized(L"La couleur pilote les barres autour du pavé tactile. Les cinq voyants du bas sont blancs.",
-                             L"The color controls the bars around the touchpad. The five bottom indicators are white.",
-                             L"Die Farbe steuert die Leisten am Touchpad. Die fünf unteren Anzeigen sind weiß.",
-                             L"颜色控制触控板周围的灯带；底部五个指示灯为白色。"),
+    text(graphics, localized(L"Les bandes latérales utilisent la couleur RGB. La lumière blanche sous le pavé reste indépendante.",
+                             L"The side bars use the RGB color. The white light under the touchpad remains independent.",
+                             L"Die Seitenleisten verwenden die RGB-Farbe. Das weiße Licht unter dem Touchpad bleibt unabhängig.",
+                             L"侧灯带使用 RGB 颜色。触控板下方的白光保持独立。"),
          RectF(lighting.X + 20, lighting.Y + 42, lighting.Width - 40, 18), 9, Color(255, 129, 140, 161));
     RectF swatch(lighting.X + 20, lighting.Y + 78, 56, 56);
     fillRound(graphics, swatch, 15, lightColor);
@@ -5644,7 +5609,7 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
     RectF ledToggle(lighting.X + 274, lighting.Y + 78, 235, 56);
     fillRound(graphics, ledToggle, 14, g_dualSensePlayerLedsEnabled ? Color(255, 24, 62, 51) : Color(255, 31, 36, 49));
     strokeRound(graphics, ledToggle, 14, g_dualSensePlayerLedsEnabled ? Color(255, 45, 112, 86) : Color(255, 55, 63, 82));
-    text(graphics, localized(L"Voyants du bas", L"Bottom indicators", L"Untere Anzeigen", L"底部指示灯"),
+    text(graphics, localized(L"Lumière blanche", L"White light", L"Weißes Licht", L"白色灯光"),
          RectF(ledToggle.X + 15, ledToggle.Y + 8, 144, 18), 9, Color(255, 225, 229, 239), FontStyleBold);
     text(graphics, g_dualSensePlayerLedsEnabled ? localized(L"Activés", L"Enabled", L"Aktiviert", L"已开启")
                                                 : localized(L"Désactivés", L"Disabled", L"Deaktiviert", L"已关闭"),

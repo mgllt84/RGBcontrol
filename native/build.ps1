@@ -20,7 +20,7 @@ $buildDirectory = Join-Path $projectRoot 'build'
 $distDirectory = Join-Path $projectRoot 'dist'
 $outputDirectory = Join-Path $workspaceRoot 'outputs\RGBCcontrol-CPP'
 $legacyDirectory = Join-Path $workspaceRoot 'outputs\RGBCcontrol'
-$appVersion = '0.16.17'
+$appVersion = '0.16.18'
 New-Item -ItemType Directory -Force -Path $buildDirectory,$distDirectory,$outputDirectory | Out-Null
 
 & (Join-Path $projectRoot 'tools\MakeIcon.ps1') | Out-Null

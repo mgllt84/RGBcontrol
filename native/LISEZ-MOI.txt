@@ -1,4 +1,4 @@
-RGBCcontrol 0.16.19 — application native C++ pour Windows
+RGBCcontrol 0.16.20 — application native C++ pour Windows
 =====================================================
 
 Installation
@@ -163,6 +163,10 @@ La version 0.16.19 rend l'aperçu lumineux fidèle à l'état commandé. Une man
 simplement détectée reste désormais totalement éteinte dans le modèle 3D : les
 bandes RGB et les témoins blancs apparaissent seulement après l'application
 réussie d'une couleur ou d'un effet, sans traits gris artificiels au repos.
+
+La version 0.16.20 remplace les deux segments blancs sous le pavé tactile par
+une seule ligne lumineuse continue, plus fine et dotée d'un halo progressif.
+Elle reste invisible tant qu'aucune couleur ou aucun effet n'a été appliqué.
 
 Le choix « Manette Xbox 360 » lance un pont XInput autonome basé sur HIDMaestro
 (mode utilisateur, sans ViGEmBus). Il crée une manette virtuelle uniquement

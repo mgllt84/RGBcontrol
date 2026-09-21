@@ -56,7 +56,7 @@ constexpr UINT TRAY_PROFILE_FIRST = 4110;
 constexpr UINT TRAY_EXIT = 4199;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.19";
+constexpr wchar_t kAppVersion[] = L"0.16.20";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -5174,9 +5174,8 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
         graphics.FillPath(&brush, &ribbon);
     };
 
-    // Keep the two white lower strips in model space. They sit directly under
-    // the touchpad edge, span its width and follow every camera rotation or
-    // touchpad click instead of looking like floating UI elements.
+    // Keep the white lower light in model space. A single continuous capsule
+    // hugs the touchpad edge and follows every camera rotation or click.
     auto drawLowerLightWindow = [&](float centerX, float halfLength, float radius, Color color) {
         if (frontVisibility <= 0.01f || color.GetA() == 0) return;
         constexpr int capSegments = 8;
@@ -5213,17 +5212,17 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
         drawRibbon(true, 0.006f, lightColor);
         drawRibbon(false, 0.006f, lightColor);
 
-        // These two lower windows are the cool-white player indicators, not
-        // part of the RGB lightbar. Their state follows the dedicated toggle
-        // and never inherits the selected colour or animated effect.
+        // This continuous lower line is a cool-white indicator, not part of
+        // the RGB lightbar. A soft three-layer falloff keeps it clean without
+        // creating a visible seam or a heavy painted stripe.
         const bool lowerIndicatorsOn = g_dualSensePlayerLedsEnabled;
         if (lowerIndicatorsOn) {
-            const Color whiteGlow(62, 194, 214, 255);
-            const Color whiteEmitter(255, 239, 245, 255);
-            drawLowerLightWindow(-0.153f, 0.128f, 0.012f, whiteGlow);
-            drawLowerLightWindow(0.153f, 0.128f, 0.012f, whiteGlow);
-            drawLowerLightWindow(-0.153f, 0.126f, 0.0050f, whiteEmitter);
-            drawLowerLightWindow(0.153f, 0.126f, 0.0050f, whiteEmitter);
+            const Color whiteGlow(44, 176, 205, 255);
+            const Color whiteSoftCore(150, 217, 232, 255);
+            const Color whiteEmitter(255, 246, 249, 255);
+            drawLowerLightWindow(0.0f, 0.282f, 0.0120f, whiteGlow);
+            drawLowerLightWindow(0.0f, 0.281f, 0.0065f, whiteSoftCore);
+            drawLowerLightWindow(0.0f, 0.280f, 0.0028f, whiteEmitter);
         }
     }
 

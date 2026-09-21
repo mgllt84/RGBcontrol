@@ -1,4 +1,4 @@
-RGBCcontrol 0.16.16 — application native C++ pour Windows
+RGBCcontrol 0.16.17 — application native C++ pour Windows
 =====================================================
 
 Installation
@@ -149,7 +149,11 @@ silencieuse après l'arrêt propre des composants par RGBCcontrol.
 La version 0.16.16 reproduit le dessin lumineux réel de la DualSense : deux
 rubans fins suivent précisément les rainures latérales du pavé tactile et deux
 petites fenêtres lumineuses apparaissent sur son bord inférieur. Les éléments
-restent attachés au modèle 3D et reflètent la couleur active de la manette.
+restent attachés au modèle 3D pendant les rotations.
+
+La version 0.16.17 sépare correctement les sources lumineuses : seules les
+bandes latérales utilisent la couleur RGB. Les petits indicateurs sous le pavé
+restent blanc froid et suivent uniquement le réglage « Voyants du bas ».
 
 Le choix « Manette Xbox 360 » lance un pont XInput autonome basé sur HIDMaestro
 (mode utilisateur, sans ViGEmBus). Il crée une manette virtuelle uniquement

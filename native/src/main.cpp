@@ -56,7 +56,7 @@ constexpr UINT TRAY_PROFILE_FIRST = 4110;
 constexpr UINT TRAY_EXIT = 4199;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.16";
+constexpr wchar_t kAppVersion[] = L"0.16.17";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -5194,19 +5194,29 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
             drawRibbon(true, 0.006f, lightColor);
             drawRibbon(false, 0.006f, lightColor);
 
-            const Color lowerGlow(62, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
-            drawLowerLightWindow(-0.086f, 0.018f, 0.010f, lowerGlow);
-            drawLowerLightWindow(0.086f, 0.018f, 0.010f, lowerGlow);
-            drawLowerLightWindow(-0.086f, 0.012f, 0.0042f, lightColor);
-            drawLowerLightWindow(0.086f, 0.012f, 0.0042f, lightColor);
         } else {
             drawRibbon(true, 0.023f, channel);
             drawRibbon(false, 0.023f, channel);
             const Color unlit(220, 52, 60, 77);
             drawRibbon(true, 0.010f, unlit);
             drawRibbon(false, 0.010f, unlit);
-            drawLowerLightWindow(-0.086f, 0.012f, 0.0042f, unlit);
-            drawLowerLightWindow(0.086f, 0.012f, 0.0042f, unlit);
+        }
+
+        // These two lower windows are the cool-white player indicators, not
+        // part of the RGB lightbar. Their state follows the dedicated toggle
+        // and never inherits the selected colour or animated effect.
+        const bool lowerIndicatorsOn = lightingReady && g_dualSensePlayerLedsEnabled;
+        if (lowerIndicatorsOn) {
+            const Color whiteGlow(62, 194, 214, 255);
+            const Color whiteEmitter(255, 239, 245, 255);
+            drawLowerLightWindow(-0.086f, 0.018f, 0.010f, whiteGlow);
+            drawLowerLightWindow(0.086f, 0.018f, 0.010f, whiteGlow);
+            drawLowerLightWindow(-0.086f, 0.012f, 0.0042f, whiteEmitter);
+            drawLowerLightWindow(0.086f, 0.012f, 0.0042f, whiteEmitter);
+        } else {
+            const Color unlitIndicator(220, 44, 50, 64);
+            drawLowerLightWindow(-0.086f, 0.012f, 0.0042f, unlitIndicator);
+            drawLowerLightWindow(0.086f, 0.012f, 0.0042f, unlitIndicator);
         }
     }
 

@@ -8,7 +8,7 @@ SetCompressor zlib
 !include "MUI2.nsh"
 
 !define APP_NAME "RGBCcontrol"
-!define APP_VERSION "0.16.15"
+!define APP_VERSION "0.16.16"
 !define APP_PUBLISHER "RGBCcontrol"
 !define APP_EXE "RGBCcontrol.exe"
 

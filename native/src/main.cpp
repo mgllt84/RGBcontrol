@@ -56,7 +56,7 @@ constexpr UINT TRAY_PROFILE_FIRST = 4110;
 constexpr UINT TRAY_EXIT = 4199;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.15";
+constexpr wchar_t kAppVersion[] = L"0.16.16";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -5153,22 +5153,60 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
         graphics.FillPath(&brush, &ribbon);
     };
 
+    // A real DualSense also lets the lightbar peek through two short windows
+    // below the centre of the touchpad. Keep them in model space as well: the
+    // highlights stay glued to the lower seam while the controller rotates or
+    // the touchpad is clicked, instead of looking like floating UI dots.
+    auto drawLowerLightWindow = [&](float centerX, float halfLength, float radius, Color color) {
+        if (frontVisibility <= 0.01f || color.GetA() == 0) return;
+        constexpr int capSegments = 8;
+        std::array<PointF, capSegments * 2 + 2> polygon{};
+        constexpr float pi = 3.14159265358979323846f;
+        const float centerY = 0.184f;
+        const float centerZ = 0.333f + touchpadLightDepthOffset;
+        int point = 0;
+        for (int index = 0; index <= capSegments; ++index) {
+            const float angle = -pi * 0.5f + pi * index / capSegments;
+            polygon[point++] = modelPoint(centerX + halfLength + std::cos(angle) * radius,
+                                          centerY + std::sin(angle) * radius, centerZ);
+        }
+        for (int index = 0; index <= capSegments; ++index) {
+            const float angle = pi * 0.5f + pi * index / capSegments;
+            polygon[point++] = modelPoint(centerX - halfLength + std::cos(angle) * radius,
+                                          centerY + std::sin(angle) * radius, centerZ);
+        }
+        SolidBrush brush(Color(static_cast<BYTE>(std::lround(color.GetA() * frontVisibility)),
+                               color.GetR(), color.GetG(), color.GetB()));
+        graphics.FillPolygon(&brush, polygon.data(), point);
+    };
+
     if (frontVisibility > 0.01f && !g_captureSuppressDualSenseLightOverlays) {
         const Color channel(215, 12, 15, 23);
         if (lightingReady) {
-            const Color glow(68, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
-            drawRibbon(true, 0.030f, glow);
-            drawRibbon(false, 0.030f, glow);
-            drawRibbon(true, 0.021f, channel);
-            drawRibbon(false, 0.021f, channel);
-            drawRibbon(true, 0.009f, lightColor);
-            drawRibbon(false, 0.009f, lightColor);
+            const Color glow(54, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
+            const Color softCore(228, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
+            drawRibbon(true, 0.032f, glow);
+            drawRibbon(false, 0.032f, glow);
+            drawRibbon(true, 0.023f, channel);
+            drawRibbon(false, 0.023f, channel);
+            drawRibbon(true, 0.014f, softCore);
+            drawRibbon(false, 0.014f, softCore);
+            drawRibbon(true, 0.006f, lightColor);
+            drawRibbon(false, 0.006f, lightColor);
+
+            const Color lowerGlow(62, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
+            drawLowerLightWindow(-0.086f, 0.018f, 0.010f, lowerGlow);
+            drawLowerLightWindow(0.086f, 0.018f, 0.010f, lowerGlow);
+            drawLowerLightWindow(-0.086f, 0.012f, 0.0042f, lightColor);
+            drawLowerLightWindow(0.086f, 0.012f, 0.0042f, lightColor);
         } else {
-            drawRibbon(true, 0.021f, channel);
-            drawRibbon(false, 0.021f, channel);
+            drawRibbon(true, 0.023f, channel);
+            drawRibbon(false, 0.023f, channel);
             const Color unlit(220, 52, 60, 77);
-            drawRibbon(true, 0.008f, unlit);
-            drawRibbon(false, 0.008f, unlit);
+            drawRibbon(true, 0.010f, unlit);
+            drawRibbon(false, 0.010f, unlit);
+            drawLowerLightWindow(-0.086f, 0.012f, 0.0042f, unlit);
+            drawLowerLightWindow(0.086f, 0.012f, 0.0042f, unlit);
         }
     }
 

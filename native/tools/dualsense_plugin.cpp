@@ -8,6 +8,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cwchar>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -446,8 +447,8 @@ int selfTest() {
 
 int wmain(int argc, wchar_t** argv) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
-    if (argc == 2 && std::wstring(argv[1]) == L"--self-test") return selfTest();
-    if (argc >= 2 && std::wstring(argv[1]) == L"--effect-worker") return runEffectWorker(argc, argv);
+    if (argc == 2 && std::wcscmp(argv[1], L"--self-test") == 0) return selfTest();
+    if (argc >= 2 && std::wcscmp(argv[1], L"--effect-worker") == 0) return runEffectWorker(argc, argv);
 
     const std::wstring command = argumentValue(argc, argv, L"--command");
     const std::wstring instance = argumentValue(argc, argv, L"--instance");

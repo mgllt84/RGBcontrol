@@ -56,7 +56,7 @@ constexpr UINT TRAY_PROFILE_FIRST = 4110;
 constexpr UINT TRAY_EXIT = 4199;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.18";
+constexpr wchar_t kAppVersion[] = L"0.16.19";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -340,6 +340,7 @@ struct DualSenseVisualAxes {
 };
 DualSenseVisualAxes g_dualSenseVisualAxes;
 bool g_dualSensePlayerLedsEnabled = true;
+std::atomic<bool> g_dualSenseLightingApplied{false};
 bool g_captureSuppressDualSenseLightOverlays = false;
 bool g_gamepadRawInputReady = false;
 ULONGLONG g_lastGamepadFrameAt = 0;
@@ -2564,6 +2565,10 @@ void applyDualSenseColor() {
             if (applyColorToDevice(device, color, failure)) ++applied;
             else if (firstFailure.empty()) firstFailure = failure;
         }
+        if (applied > 0) {
+            g_dualSenseLightingApplied = color != 0;
+            if (g_window) InvalidateRect(g_window, nullptr, FALSE);
+        }
         postStatus(applied == static_cast<int>(devices.size())
             ? localizedFor(language, L"Lumières DualSense mises à jour.", L"DualSense lights updated.",
                            L"DualSense-Beleuchtung aktualisiert.", L"DualSense 灯光已更新。")
@@ -2601,14 +2606,22 @@ void applyStaticColor() {
         int initializedZones = 0;
         int appliedCount = 0;
         int selectedCount = 0;
+        bool dualSenseApplied = false;
         std::wstring firstFailure;
         for (const RgbDevice& device : devices) {
             if (!device.selected) continue;
             ++selectedCount;
             std::wstring failure;
             const bool applied = applyColorToDevice(device, color, failure, &initializedZones);
-            if (applied) ++appliedCount;
+            if (applied) {
+                ++appliedCount;
+                dualSenseApplied = dualSenseApplied || isDualSenseDevice(device);
+            }
             else if (firstFailure.empty()) firstFailure = device.name + (failure.empty() ? L"" : L" · " + failure);
+        }
+        if (dualSenseApplied) {
+            g_dualSenseLightingApplied = color != 0;
+            if (g_window) InvalidateRect(g_window, nullptr, FALSE);
         }
         if (appliedCount == selectedCount && selectedCount > 0) {
             const std::wstring zoneNote = initializedZones > 0
@@ -2924,6 +2937,7 @@ void startEffect() {
         std::vector<RgbDevice> openRgbSelected;
         int pluginApplied = 0;
         int pluginFailures = 0;
+        bool dualSenseApplied = false;
         std::wstring firstPluginFailure;
         for (const RgbDevice& device : devices) {
             if (!device.selected) continue;
@@ -2932,7 +2946,10 @@ void startEffect() {
                     ? g_pluginEngine.applyEffect(device, mode, baseColor, g_brightness,
                                                  g_effectSpeed.load(), g_effectIntensity.load())
                     : g_pluginEngine.applyStatic(device, scaleColor(baseColor, g_brightness / 100.0), 100);
-                if (result.success) ++pluginApplied;
+                if (result.success) {
+                    ++pluginApplied;
+                    dualSenseApplied = dualSenseApplied || isDualSenseDevice(device);
+                }
                 else {
                     ++pluginFailures;
                     if (firstPluginFailure.empty()) firstPluginFailure = device.name + L" · " + result.message;
@@ -2940,6 +2957,10 @@ void startEffect() {
             } else if (device.providerId == L"openrgb") {
                 openRgbSelected.push_back(device);
             }
+        }
+        if (dualSenseApplied) {
+            g_dualSenseLightingApplied = true;
+            if (g_window) InvalidateRect(g_window, nullptr, FALSE);
         }
         if (openRgbSelected.empty()) {
             postStatus(pluginApplied > 0
@@ -5101,7 +5122,7 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
     // and front-face visibility, so the light physically follows the touchpad
     // seam and disappears when the controller is viewed from the rear.
     const std::uint32_t litRgb = gamepadLightingPreviewRgb(GetTickCount64());
-    const Color lightColor(lightingReady ? 255 : 170,
+    const Color lightColor(255,
                           static_cast<BYTE>((litRgb >> 16) & 0xff),
                           static_cast<BYTE>((litRgb >> 8) & 0xff),
                           static_cast<BYTE>(litRgb & 0xff));
@@ -5179,32 +5200,23 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
         graphics.FillPolygon(&brush, polygon.data(), point);
     };
 
-    if (frontVisibility > 0.01f && !g_captureSuppressDualSenseLightOverlays) {
+    if (lightingReady && frontVisibility > 0.01f && !g_captureSuppressDualSenseLightOverlays) {
         const Color channel(215, 12, 15, 23);
-        if (lightingReady) {
-            const Color glow(54, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
-            const Color softCore(228, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
-            drawRibbon(true, 0.032f, glow);
-            drawRibbon(false, 0.032f, glow);
-            drawRibbon(true, 0.023f, channel);
-            drawRibbon(false, 0.023f, channel);
-            drawRibbon(true, 0.014f, softCore);
-            drawRibbon(false, 0.014f, softCore);
-            drawRibbon(true, 0.006f, lightColor);
-            drawRibbon(false, 0.006f, lightColor);
-
-        } else {
-            drawRibbon(true, 0.023f, channel);
-            drawRibbon(false, 0.023f, channel);
-            const Color unlit(220, 52, 60, 77);
-            drawRibbon(true, 0.010f, unlit);
-            drawRibbon(false, 0.010f, unlit);
-        }
+        const Color glow(54, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
+        const Color softCore(228, lightColor.GetR(), lightColor.GetG(), lightColor.GetB());
+        drawRibbon(true, 0.032f, glow);
+        drawRibbon(false, 0.032f, glow);
+        drawRibbon(true, 0.023f, channel);
+        drawRibbon(false, 0.023f, channel);
+        drawRibbon(true, 0.014f, softCore);
+        drawRibbon(false, 0.014f, softCore);
+        drawRibbon(true, 0.006f, lightColor);
+        drawRibbon(false, 0.006f, lightColor);
 
         // These two lower windows are the cool-white player indicators, not
         // part of the RGB lightbar. Their state follows the dedicated toggle
         // and never inherits the selected colour or animated effect.
-        const bool lowerIndicatorsOn = lightingReady && g_dualSensePlayerLedsEnabled;
+        const bool lowerIndicatorsOn = g_dualSensePlayerLedsEnabled;
         if (lowerIndicatorsOn) {
             const Color whiteGlow(62, 194, 214, 255);
             const Color whiteEmitter(255, 239, 245, 255);
@@ -5212,10 +5224,6 @@ void drawDualSenseModel(Graphics& graphics, const RectF& modelRect, bool liveInp
             drawLowerLightWindow(0.153f, 0.128f, 0.012f, whiteGlow);
             drawLowerLightWindow(-0.153f, 0.126f, 0.0050f, whiteEmitter);
             drawLowerLightWindow(0.153f, 0.126f, 0.0050f, whiteEmitter);
-        } else {
-            const Color unlitIndicator(220, 44, 50, 64);
-            drawLowerLightWindow(-0.153f, 0.126f, 0.0050f, unlitIndicator);
-            drawLowerLightWindow(0.153f, 0.126f, 0.0050f, unlitIndicator);
         }
     }
 
@@ -5233,6 +5241,7 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
     const bool liveInput = g_dualSenseLive.seen && now - g_dualSenseLive.lastInputAt < 2500;
     const int lightingCount = dualSenseDeviceCount();
     const bool lightingReady = lightingCount > 0;
+    const bool lightingVisible = lightingReady && g_dualSenseLightingApplied.load();
     const bool connected = liveInput || lightingReady;
 
     drawPageIntro(graphics, x, originY, available - 170,
@@ -5311,7 +5320,7 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
     if (g_dualSenseMesh.loaded) {
         const RectF modelRect(contentX, contentY, modelWidth, modelHeight);
         g_gamepadModelRect = modelRect;
-        drawDualSenseModel(graphics, modelRect, liveInput, lightingReady);
+        drawDualSenseModel(graphics, modelRect, liveInput, lightingVisible);
         text(graphics, localized(L"Glisser pour tourner · double-clic pour réinitialiser",
                                  L"Drag to rotate · double-click to reset",
                                  L"Ziehen zum Drehen · Doppelklick zum Zurücksetzen",
@@ -5368,23 +5377,24 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
 
     const std::uint32_t litRgb = gamepadLightingPreviewRgb(now);
     Color lightColor(255, static_cast<BYTE>((litRgb >> 16) & 0xff), static_cast<BYTE>((litRgb >> 8) & 0xff), static_cast<BYTE>(litRgb & 0xff));
-    Pen lightbar(lightingReady ? lightColor : Color(255, 67, 76, 98), 4.0f);
-    graphics.DrawArc(&lightbar, RectF(padX + padW / 2 - 83, padY + 25, 166, 94), 197, 146);
+    if (lightingVisible) {
+        Pen lightbar(lightColor, 4.0f);
+        graphics.DrawArc(&lightbar, RectF(padX + padW / 2 - 83, padY + 25, 166, 94), 197, 146);
+    }
 
     RectF touchpad(padX + padW / 2 - 67, padY + 31, 134, 66);
     fillRound(graphics, touchpad, 12, g_dualSenseLive.buttons[13] && liveInput ? accentColor(115) : Color(255, 24, 28, 38));
     strokeRound(graphics, touchpad, 11, g_dualSenseLive.buttons[13] && liveInput ? accentTint(0.45) : Color(255, 65, 73, 93));
     text(graphics, L"TOUCHPAD", touchpad, 7, Color(255, 111, 122, 145), FontStyleBold,
          StringAlignmentCenter, StringAlignmentCenter);
-    for (int indicator = 0; indicator < 5; ++indicator) {
-        const float indicatorX = padX + padW / 2 - 20.0f + indicator * 10.0f;
-        SolidBrush indicatorGlow(g_dualSensePlayerLedsEnabled && lightingReady ? Color(70, 220, 230, 255) : Color(0, 0, 0, 0));
-        SolidBrush indicatorFill(g_dualSensePlayerLedsEnabled && lightingReady ? Color(255, 231, 237, 255)
-                                                                              : Color(255, 63, 70, 88));
-        if (g_dualSensePlayerLedsEnabled && lightingReady) {
+    if (lightingVisible && g_dualSensePlayerLedsEnabled) {
+        for (int indicator = 0; indicator < 5; ++indicator) {
+            const float indicatorX = padX + padW / 2 - 20.0f + indicator * 10.0f;
+            SolidBrush indicatorGlow(Color(70, 220, 230, 255));
+            SolidBrush indicatorFill(Color(255, 231, 237, 255));
             graphics.FillEllipse(&indicatorGlow, RectF(indicatorX - 3.5f, padY + 102.5f, 7, 7));
+            graphics.FillEllipse(&indicatorFill, RectF(indicatorX - 2, padY + 104, 4, 4));
         }
-        graphics.FillEllipse(&indicatorFill, RectF(indicatorX - 2, padY + 104, 4, 4));
     }
     fillRound(graphics, RectF(padX + padW / 2 - 91, padY + 58, 11, 4), 2,
               g_dualSenseLive.buttons[8] && liveInput ? accentColor() : Color(255, 64, 70, 84));
@@ -5469,17 +5479,19 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
         strip.AddBezier(p0, p1, p2, p3);
         graphics.DrawPath(&pen, &strip);
     };
-    const Color previewColor = lightingReady ? lightColor : Color(255, 67, 76, 98);
+    const Color previewColor = lightColor;
     Pen photoLightGlow(Color(88, previewColor.GetR(), previewColor.GetG(), previewColor.GetB()), 12.0f);
     photoLightGlow.SetStartCap(LineCapRound);
     photoLightGlow.SetEndCap(LineCapRound);
     Pen photoLightCore(previewColor, 4.8f);
     photoLightCore.SetStartCap(LineCapRound);
     photoLightCore.SetEndCap(LineCapRound);
-    drawLightStrip(true, photoLightGlow);
-    drawLightStrip(false, photoLightGlow);
-    drawLightStrip(true, photoLightCore);
-    drawLightStrip(false, photoLightCore);
+    if (lightingVisible) {
+        drawLightStrip(true, photoLightGlow);
+        drawLightStrip(false, photoLightGlow);
+        drawLightStrip(true, photoLightCore);
+        drawLightStrip(false, photoLightCore);
+    }
 
     auto photoGlow = [&](float imageX, float imageY, float imageRadius, bool active) {
         if (!active || !liveInput) return;
@@ -5529,15 +5541,14 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
     photoStick(466, 603, g_dualSenseLive.leftX, g_dualSenseLive.leftY, g_dualSenseLive.buttons[10]);
     photoStick(894, 603, g_dualSenseLive.rightX, g_dualSenseLive.rightY, g_dualSenseLive.buttons[11]);
 
-    for (int indicator = 0; indicator < 5; ++indicator) {
-        const PointF led = photoPoint(638.0f + indicator * 21.0f, 493.0f);
-        const bool enabled = g_dualSensePlayerLedsEnabled && lightingReady;
-        if (enabled) {
+    if (lightingVisible && g_dualSensePlayerLedsEnabled) {
+        for (int indicator = 0; indicator < 5; ++indicator) {
+            const PointF led = photoPoint(638.0f + indicator * 21.0f, 493.0f);
             SolidBrush ledGlow(Color(78, 215, 229, 255));
             graphics.FillEllipse(&ledGlow, RectF(led.X - 5, led.Y - 5, 10, 10));
+            SolidBrush ledFill(Color(255, 238, 243, 255));
+            graphics.FillEllipse(&ledFill, RectF(led.X - 2.1f, led.Y - 2.1f, 4.2f, 4.2f));
         }
-        SolidBrush ledFill(enabled ? Color(255, 238, 243, 255) : Color(255, 45, 51, 65));
-        graphics.FillEllipse(&ledFill, RectF(led.X - 2.1f, led.Y - 2.1f, 4.2f, 4.2f));
     }
 
     }
@@ -5715,7 +5726,7 @@ void drawGamepadFastOverlay(Graphics& graphics, int width, int height) {
     const RectF modelRect(contentX, contentY, modelWidth, 330.0f);
     const ULONGLONG now = GetTickCount64();
     const bool liveInput = g_dualSenseLive.seen && now - g_dualSenseLive.lastInputAt < 2500;
-    const bool lightingReady = dualSenseDeviceCount() > 0;
+    const bool lightingReady = dualSenseDeviceCount() > 0 && g_dualSenseLightingApplied.load();
     const GraphicsState state = graphics.Save();
     graphics.SetClip(RectF(static_cast<REAL>(kSidebarWidth), static_cast<REAL>(kHeaderHeight),
                            static_cast<REAL>(std::max(0, width - kSidebarWidth)),
@@ -8198,6 +8209,7 @@ int createInterfaceCaptures(const fs::path& destination) {
     dualSenseCapture.auxiliaryLedMask = 0x1f;
     g_rgbDevices.push_back(dualSenseCapture);
     g_dualSensePlayerLedsEnabled = true;
+    g_dualSenseLightingApplied = true;
     g_dualSenseLive = {};
     g_dualSenseLive.seen = true;
     g_dualSenseLive.bluetooth = true;
@@ -8215,6 +8227,9 @@ int createInterfaceCaptures(const fs::path& destination) {
     g_dualSenseLive.buttons[13] = true;
     updateDualSenseVisualAxes(GetTickCount64(), true);
     ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads.png") && ok;
+    g_dualSenseLightingApplied = false;
+    ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads-lights-off.png") && ok;
+    g_dualSenseLightingApplied = true;
     g_captureSuppressDualSenseLightOverlays = true;
     ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads-model-geometry.png") && ok;
     g_captureSuppressDualSenseLightOverlays = false;
@@ -8243,6 +8258,7 @@ int createInterfaceCaptures(const fs::path& destination) {
     ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads-color-picker.png") && ok;
     g_colorPickerOpen = false;
     g_rgbDevices.pop_back();
+    g_dualSenseLightingApplied = false;
     g_dualSenseLive = {};
     g_dualSenseVisualAxes = {};
     g_duckyAssistantStep = 0;
@@ -9162,6 +9178,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 }
             }
             g_rgbDevices = std::move(result->rgb);
+            if (dualSenseDeviceCount() == 0) g_dualSenseLightingApplied = false;
             g_pluginProviders = std::move(result->pluginProviders);
             g_rejectedPlugins = result->rejectedPlugins;
             g_fans = std::move(result->fans);

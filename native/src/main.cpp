@@ -56,7 +56,7 @@ constexpr UINT TRAY_PROFILE_FIRST = 4110;
 constexpr UINT TRAY_EXIT = 4199;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.20";
+constexpr wchar_t kAppVersion[] = L"0.16.21";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -350,7 +350,11 @@ XboxBridgeStatus g_xboxBridgeStatus = XboxBridgeStatus::Off;
 std::wstring g_xboxBridgeMessage;
 HANDLE g_xboxBridgeProcess = nullptr;
 HANDLE g_xboxBridgeInput = nullptr;
+HANDLE g_xboxBridgeOutput = nullptr;
+std::string g_xboxBridgeBuffer;
 ULONGLONG g_xboxBridgeStartedAt = 0;
+ULONGLONG g_xboxBridgeLastRestartAt = 0;
+bool g_xboxBridgeEverReady = false;
 bool parseDualSenseInputReport(const BYTE* report, std::size_t size, bool bluetooth, bool edge,
                                DualSenseLiveState& state);
 bool updateDualSenseVisualAxes(ULONGLONG now, bool snap = false);
@@ -2018,7 +2022,9 @@ fs::path xboxBridgeExecutable() {
 
 void closeXboxBridgeHandles() {
     if (g_xboxBridgeInput) { CloseHandle(g_xboxBridgeInput); g_xboxBridgeInput = nullptr; }
+    if (g_xboxBridgeOutput) { CloseHandle(g_xboxBridgeOutput); g_xboxBridgeOutput = nullptr; }
     if (g_xboxBridgeProcess) { CloseHandle(g_xboxBridgeProcess); g_xboxBridgeProcess = nullptr; }
+    g_xboxBridgeBuffer.clear();
 }
 
 void stopXboxBridge() {
@@ -2037,18 +2043,26 @@ void stopXboxBridge() {
         CloseHandle(g_xboxBridgeProcess);
         g_xboxBridgeProcess = nullptr;
     }
+    if (g_xboxBridgeOutput) { CloseHandle(g_xboxBridgeOutput); g_xboxBridgeOutput = nullptr; }
+    g_xboxBridgeBuffer.clear();
     g_xboxModeEnabled = false;
     g_xboxBridgeStatus = XboxBridgeStatus::Off;
     g_xboxBridgeMessage.clear();
+    g_xboxBridgeEverReady = false;
 }
 
 void failXboxBridge(const std::wstring& message) {
     if (g_xboxBridgeInput) { CloseHandle(g_xboxBridgeInput); g_xboxBridgeInput = nullptr; }
+    if (g_xboxBridgeOutput) { CloseHandle(g_xboxBridgeOutput); g_xboxBridgeOutput = nullptr; }
     if (g_xboxBridgeProcess) {
-        WaitForSingleObject(g_xboxBridgeProcess, 300);
+        if (WaitForSingleObject(g_xboxBridgeProcess, 300) == WAIT_TIMEOUT) {
+            TerminateProcess(g_xboxBridgeProcess, 31);
+            WaitForSingleObject(g_xboxBridgeProcess, 300);
+        }
         CloseHandle(g_xboxBridgeProcess);
         g_xboxBridgeProcess = nullptr;
     }
+    g_xboxBridgeBuffer.clear();
     g_xboxBridgeStatus = XboxBridgeStatus::Error;
     g_xboxBridgeMessage = message;
 }
@@ -2074,26 +2088,38 @@ bool startXboxBridge() {
         return false;
     }
     SetHandleInformation(parentInput, HANDLE_FLAG_INHERIT, 0);
-    HANDLE nullOutput = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                    &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE parentOutput = nullptr;
+    HANDLE childOutput = nullptr;
+    if (!CreatePipe(&parentOutput, &childOutput, &security, 0)) {
+        CloseHandle(childInput);
+        CloseHandle(parentInput);
+        g_xboxBridgeStatus = XboxBridgeStatus::Error;
+        g_xboxBridgeMessage = localized(L"Impossible d'ouvrir le retour du canal XInput.",
+                                         L"Could not open the XInput feedback channel.",
+                                         L"XInput-Rückkanal konnte nicht geöffnet werden.", L"无法打开 XInput 返回通道。");
+        return false;
+    }
+    SetHandleInformation(parentOutput, HANDLE_FLAG_INHERIT, 0);
 
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
     startup.wShowWindow = SW_HIDE;
     startup.hStdInput = childInput;
-    startup.hStdOutput = nullOutput != INVALID_HANDLE_VALUE ? nullOutput : GetStdHandle(STD_OUTPUT_HANDLE);
-    startup.hStdError = startup.hStdOutput;
+    startup.hStdOutput = childOutput;
+    startup.hStdError = childOutput;
     PROCESS_INFORMATION process{};
     std::wstring command = quote(executable);
     std::vector<wchar_t> mutableCommand(command.begin(), command.end());
     mutableCommand.push_back(L'\0');
-    const BOOL created = CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+    const BOOL created = CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, TRUE,
+                                        CREATE_NO_WINDOW | ABOVE_NORMAL_PRIORITY_CLASS,
                                         nullptr, g_appDirectory.c_str(), &startup, &process);
     CloseHandle(childInput);
-    if (nullOutput != INVALID_HANDLE_VALUE) CloseHandle(nullOutput);
+    CloseHandle(childOutput);
     if (!created) {
         CloseHandle(parentInput);
+        CloseHandle(parentOutput);
         g_xboxBridgeStatus = XboxBridgeStatus::Error;
         g_xboxBridgeMessage = localized(L"Le mode Xbox n'a pas pu démarrer.", L"Xbox mode could not start.",
                                         L"Xbox-Modus konnte nicht gestartet werden.", L"Xbox 模式无法启动。");
@@ -2102,15 +2128,48 @@ bool startXboxBridge() {
     CloseHandle(process.hThread);
     g_xboxBridgeProcess = process.hProcess;
     g_xboxBridgeInput = parentInput;
+    g_xboxBridgeOutput = parentOutput;
     g_xboxBridgeStartedAt = GetTickCount64();
+    g_xboxBridgeLastRestartAt = g_xboxBridgeStartedAt;
     g_xboxBridgeStatus = XboxBridgeStatus::Starting;
     g_xboxBridgeMessage.clear();
+    g_xboxBridgeBuffer.clear();
     g_xboxModeEnabled = true;
     return true;
 }
 
 bool pollXboxBridge() {
     if (!g_xboxModeEnabled || !g_xboxBridgeProcess) return false;
+    bool changed = false;
+    if (g_xboxBridgeOutput) {
+        DWORD available = 0;
+        while (PeekNamedPipe(g_xboxBridgeOutput, nullptr, 0, nullptr, &available, nullptr) && available > 0) {
+            std::array<char, 512> chunk{};
+            DWORD read = 0;
+            const DWORD requested = std::min<DWORD>(available, static_cast<DWORD>(chunk.size()));
+            if (!ReadFile(g_xboxBridgeOutput, chunk.data(), requested, &read, nullptr) || read == 0) break;
+            g_xboxBridgeBuffer.append(chunk.data(), read);
+            while (true) {
+                const std::size_t newline = g_xboxBridgeBuffer.find('\n');
+                if (newline == std::string::npos) break;
+                std::string line = g_xboxBridgeBuffer.substr(0, newline);
+                g_xboxBridgeBuffer.erase(0, newline + 1);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.rfind("READY", 0) == 0) {
+                    g_xboxBridgeStatus = XboxBridgeStatus::Ready;
+                    g_xboxBridgeMessage = localized(L"Emplacement XInput 1 prioritaire · entrée stabilisée.",
+                                                     L"Priority XInput slot 1 · stabilized input.",
+                                                     L"Priorisierter XInput-Slot 1 · stabilisierte Eingabe.",
+                                                     L"优先 XInput 1 号槽位 · 输入已稳定。");
+                    g_xboxBridgeEverReady = true;
+                    changed = true;
+                } else if (line.rfind("ERROR ", 0) == 0) {
+                    failXboxBridge(widen(line.substr(6)));
+                    return true;
+                }
+            }
+        }
+    }
     DWORD exitCode = 0;
     if (!GetExitCodeProcess(g_xboxBridgeProcess, &exitCode) || exitCode != STILL_ACTIVE) {
         failXboxBridge(localized(L"Activation refusée. Relance RGBCcontrol en administrateur.",
@@ -2119,11 +2178,14 @@ bool pollXboxBridge() {
                                  L"激活失败。请以管理员身份重新启动 RGBCcontrol。"));
         return true;
     }
-    if (g_xboxBridgeStatus == XboxBridgeStatus::Starting && GetTickCount64() - g_xboxBridgeStartedAt >= 1300) {
-        g_xboxBridgeStatus = XboxBridgeStatus::Ready;
+    if (g_xboxBridgeStatus == XboxBridgeStatus::Starting && GetTickCount64() - g_xboxBridgeStartedAt >= 15000) {
+        failXboxBridge(localized(L"Le contrôleur Xbox virtuel n'a pas répondu à temps.",
+                                 L"The virtual Xbox controller did not become ready in time.",
+                                 L"Der virtuelle Xbox-Controller antwortete nicht rechtzeitig.",
+                                 L"虚拟 Xbox 手柄未能及时就绪。"));
         return true;
     }
-    return false;
+    return changed;
 }
 
 void sendXboxState(const DualSenseLiveState& state) {
@@ -5674,7 +5736,7 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
                Action::GamepadUseNative);
     modeChoice(xboxChoice, g_xboxModeEnabled, L"X",
                localized(L"Manette Xbox 360", L"Xbox 360 controller", L"Xbox-360-Controller", L"Xbox 360 手柄"),
-               localized(L"Compatibilité XInput", L"XInput compatibility", L"XInput-Kompatibilität", L"XInput 兼容"),
+               localized(L"XInput prioritaire", L"Priority XInput", L"Priorisiertes XInput", L"优先 XInput"),
                Action::GamepadUseXbox);
 
     RectF bridgeStatus(compatibility.X + 20 + choicesWidth + 18, compatibility.Y + 84,
@@ -5696,8 +5758,10 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
     const std::wstring bridgeDetail = bridgeError && !g_xboxBridgeMessage.empty()
         ? g_xboxBridgeMessage
         : bridgeReady
-            ? localized(L"Une manette Xbox virtuelle est visible dans les jeux.", L"A virtual Xbox controller is visible to games.",
-                        L"Ein virtueller Xbox-Controller ist in Spielen sichtbar.", L"游戏现在可以看到虚拟 Xbox 手柄。")
+            ? localized(L"Slot 1 prioritaire · sticks filtrés · sécurité anti-touche bloquée.",
+                        L"Priority slot 1 · filtered sticks · stuck-input protection.",
+                        L"Prioritätsslot 1 · gefilterte Sticks · Schutz vor hängenden Eingaben.",
+                        L"优先 1 号槽位 · 摇杆滤波 · 防卡键保护。")
             : localized(L"Touchpad, gyroscope et gâchettes adaptatives restent natifs.",
                         L"Touchpad, gyro and adaptive triggers remain native.",
                         L"Touchpad, Gyro und adaptive Trigger bleiben nativ.",
@@ -8599,7 +8663,10 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             break;
         case Action::GamepadUseXbox:
             if (g_xboxBridgeStatus == XboxBridgeStatus::Ready || g_xboxBridgeStatus == XboxBridgeStatus::Starting) break;
-            if (!g_isAdministrator) {
+            // A previously installed HIDMaestro driver works in user mode.
+            // Ask for elevation only after a real activation failure instead
+            // of forcing every play session to restart as administrator.
+            if (!g_isAdministrator && g_xboxBridgeStatus == XboxBridgeStatus::Error) {
                 const int answer = MessageBoxW(g_window,
                     localized(L"La première activation installe le contrôleur virtuel Windows. Relancer RGBCcontrol en administrateur ?",
                               L"The first activation installs the Windows virtual controller. Restart RGBCcontrol as administrator?",
@@ -9041,7 +9108,14 @@ void handleDualSenseRawInput(HRAWINPUT input) {
         parsed = parseDualSenseInputReport(report, hid.dwSizeHid, bluetooth, edge, g_dualSenseLive) || parsed;
     }
     if (parsed && !g_dualSenseVisualAxes.initialized) updateDualSenseVisualAxes(GetTickCount64(), true);
-    if (parsed && g_xboxModeEnabled) sendXboxState(g_dualSenseLive);
+    if (parsed && g_xboxModeEnabled) {
+        const ULONGLONG now = GetTickCount64();
+        if (!g_xboxBridgeProcess && (g_xboxBridgeStatus == XboxBridgeStatus::Off || g_xboxBridgeEverReady) &&
+            now - g_xboxBridgeLastRestartAt >= 1500) {
+            startXboxBridge();
+        }
+        sendXboxState(g_dualSenseLive);
+    }
     if (parsed && g_page == Page::Gamepads) {
         const ULONGLONG now = GetTickCount64();
         if (now - g_lastGamepadFrameAt >= 16) {
@@ -9108,7 +9182,13 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         case WM_TIMER:
             if (wParam == APP_TIMER) {
                 const ULONGLONG now = GetTickCount64();
-                if (pollXboxBridge()) InvalidateRect(window, nullptr, FALSE);
+                if (pollXboxBridge()) {
+                    if (g_xboxBridgeStatus == XboxBridgeStatus::Ready && g_dualSenseLive.seen &&
+                        now - g_dualSenseLive.lastInputAt < 500) {
+                        sendXboxState(g_dualSenseLive);
+                    }
+                    InvalidateRect(window, nullptr, FALSE);
+                }
                 const bool certificationBusy = g_certificationDevice >= 0 || g_certificationApplying || g_certificationAwaitingAnswer;
                 if (!certificationBusy && g_hotplugScanPending && !g_scanInFlight && now - g_hotplugEventAt >= 750) {
                     g_hotplugScanPending = false;

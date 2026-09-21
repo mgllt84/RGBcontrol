@@ -1,4 +1,4 @@
-RGBCcontrol 0.16.20 — application native C++ pour Windows
+RGBCcontrol 0.16.21 — application native C++ pour Windows
 =====================================================
 
 Installation
@@ -167,6 +167,16 @@ réussie d'une couleur ou d'un effet, sans traits gris artificiels au repos.
 La version 0.16.20 remplace les deux segments blancs sous le pavé tactile par
 une seule ligne lumineuse continue, plus fine et dotée d'un halo progressif.
 Elle reste invisible tant qu'aucune couleur ou aucun effet n'a été appliqué.
+
+La version 0.16.21 fiabilise la conversion DualSense vers Xbox 360. Le pont
+réserve d'abord le slot XInput 1, attend la confirmation réelle du contrôleur
+virtuel et se relance automatiquement après une interruption. Les états HID
+sont regroupés sans file d'attente, les sticks utilisent une petite zone morte
+radiale et un filtre adaptatif à faible latence, et les gâchettes sont nettoyées
+sans ralentir les pressions franches. Si la manette est débranchée, un état
+neutre est envoyé sous 120 ms afin qu'aucune touche ne reste bloquée. Une fois
+le pilote installé, le mode Xbox peut démarrer sans relancer systématiquement
+l'application en administrateur.
 
 Le choix « Manette Xbox 360 » lance un pont XInput autonome basé sur HIDMaestro
 (mode utilisateur, sans ViGEmBus). Il crée une manette virtuelle uniquement

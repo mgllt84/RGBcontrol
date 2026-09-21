@@ -20,7 +20,7 @@ $buildDirectory = Join-Path $projectRoot 'build'
 $distDirectory = Join-Path $projectRoot 'dist'
 $outputDirectory = Join-Path $workspaceRoot 'outputs\RGBCcontrol-CPP'
 $legacyDirectory = Join-Path $workspaceRoot 'outputs\RGBCcontrol'
-$appVersion = '0.16.20'
+$appVersion = '0.16.21'
 New-Item -ItemType Directory -Force -Path $buildDirectory,$distDirectory,$outputDirectory | Out-Null
 
 & (Join-Path $projectRoot 'tools\MakeIcon.ps1') | Out-Null
@@ -81,6 +81,9 @@ if (Test-Path -LiteralPath $gamepadBridgeBuild) { Remove-Item -LiteralPath $game
 $gamepadBridgeProject = Join-Path $projectRoot 'src\gamepad_bridge\GamepadBridge.csproj'
 & $dotnetSdk publish $gamepadBridgeProject -c Release -r win-x64 --self-contained true --no-restore -o $gamepadBridgeBuild
 if ($LASTEXITCODE -ne 0) { throw 'La compilation du pont XInput a échoué.' }
+$gamepadBridgeExecutable = Join-Path $gamepadBridgeBuild 'RGBCcontrol.GamepadBridge.exe'
+& $gamepadBridgeExecutable --self-test
+if ($LASTEXITCODE -ne 0) { throw "Le test du pont XInput a échoué (code $LASTEXITCODE)." }
 
 $hardwareSource = Join-Path $legacyDirectory 'HardwareMonitor'
 $hardwareBuild = Join-Path $buildDirectory 'HardwareMonitor'

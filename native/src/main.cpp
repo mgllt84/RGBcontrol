@@ -73,7 +73,7 @@ constexpr WPARAM WTS_SESSION_LOCK_VALUE = 0x7;
 constexpr WPARAM WTS_SESSION_UNLOCK_VALUE = 0x8;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.23";
+constexpr wchar_t kAppVersion[] = L"0.16.24";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -461,6 +461,10 @@ int g_pickerBrightness = 100;
 std::atomic<bool> g_updateInFlight{false};
 std::wstring g_updateStatus;
 fs::path g_downloadedUpdate;
+bool g_updateAvailable = false;
+std::wstring g_availableVersion;
+bool g_updateAvailabilityChecked = false;
+ULONGLONG g_lastUpdateCheckAt = 0;
 bool g_justUpdated = false;
 std::array<AppProfile, 3> g_profiles;
 int g_activeProfile = -1;
@@ -553,6 +557,8 @@ std::wstring g_certificationStatus;
 struct UpdateResult {
     std::wstring status;
     fs::path installer;
+    std::wstring version;
+    bool available = false;
 };
 
 struct FanCommandResult {
@@ -1665,20 +1671,24 @@ std::wstring sha256File(const fs::path& path) {
     return result;
 }
 
-void postUpdateResult(std::wstring status, fs::path installer = {}) {
-    auto* result = new UpdateResult{std::move(status), std::move(installer)};
+void postUpdateResult(std::wstring status, fs::path installer = {}, std::wstring version = {}, bool available = false) {
+    auto* result = new UpdateResult{std::move(status), std::move(installer), std::move(version), available};
     if (!PostMessageW(g_window, WM_UPDATE_COMPLETE, 0, reinterpret_cast<LPARAM>(result))) delete result;
 }
 
-void startUpdateCheck() {
+void startUpdateCheck(bool installWhenReady = true) {
     if (g_updateInFlight.exchange(true)) return;
     const Language language = g_language;
+    g_updateAvailabilityChecked = true;
+    g_lastUpdateCheckAt = GetTickCount64();
+    g_updateAvailable = false;
+    g_availableVersion.clear();
     g_downloadedUpdate.clear();
     g_updateStatus = localizedFor(language, L"Vérification de la dernière version...", L"Checking for the latest version...",
                                   L"Die neueste Version wird gesucht...", L"正在检查最新版本…");
     InvalidateRect(g_window, nullptr, FALSE);
     const fs::path appDirectory = g_appDirectory;
-    std::thread([language, appDirectory] {
+    std::thread([language, appDirectory, installWhenReady] {
         const fs::path channel = appDirectory / L"update-channel.ini";
         std::wstring manifestUrl = readIniValue(channel, L"manifest_url");
         if (manifestUrl.empty()) manifestUrl = kOfficialUpdateManifestUrl;
@@ -1723,6 +1733,18 @@ void startUpdateCheck() {
                                           L"RGBCcontrol ist bereits aktuell.", L"RGBCcontrol 已是最新版本。"));
             return;
         }
+        if (!installWhenReady) {
+            const fs::path noInstaller;
+            postUpdateResult(
+                std::wstring(localizedFor(language, L"Nouvelle version disponible : ", L"New version available: ",
+                                           L"Neue Version verfügbar: ", L"发现新版本：")) + version +
+                    localizedFor(language, L". Ouvre les paramètres pour l'installer.",
+                                 L". Open Settings to install it.",
+                                 L". Öffne die Einstellungen zur Installation.",
+                                 L"。打开设置即可安装。"),
+                noInstaller, version, true);
+            return;
+        }
         fs::path installer = fs::path(temporaryDirectory) / (L"RGBCcontrol-Setup-" + version + L".exe");
         DeleteFileW(installer.c_str());
         if (FAILED(URLDownloadToFileW(nullptr, installerUrl.c_str(), installer.c_str(), 0, nullptr))) {
@@ -1739,7 +1761,7 @@ void startUpdateCheck() {
         postUpdateResult(localizedFor(language, L"Mise à jour téléchargée et vérifiée. Prête à installer.",
                                       L"Update downloaded and verified. Ready to install.",
                                       L"Update heruntergeladen und geprüft. Installationsbereit.",
-                                      L"更新已下载并验证，可以安装。"), installer);
+                                      L"更新已下载并验证，可以安装。"), installer, version, true);
     }).detach();
 }
 
@@ -4466,7 +4488,7 @@ void drawHeader(Graphics& graphics, int width) {
     fillRound(graphics, controls, 13, Color(228, 18, 22, 33));
     strokeRound(graphics, controls, 13, Color(255, 39, 46, 63));
 
-    const bool updateReady = !g_downloadedUpdate.empty();
+    const bool updateReady = g_updateAvailable || !g_downloadedUpdate.empty();
     constexpr float statusWidth = 268.0f;
     const float statusRight = controls.X - 12.0f - (updateReady ? 54.0f : 0.0f);
     RectF statusPill(statusRight - statusWidth, 16, statusWidth, 36);
@@ -4529,6 +4551,42 @@ void drawHeader(Graphics& graphics, int width) {
     text(graphics, statusText, RectF(statusPill.X + 34, statusPill.Y, statusPill.Width - 45, statusPill.Height),
          10, statusForeground, FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
     addHit(statusPill, Action::HeaderStatus);
+
+    if (updateReady) {
+        const bool installerReady = !g_downloadedUpdate.empty();
+        const float notificationX = 236.0f;
+        const float notificationWidth = std::clamp(static_cast<float>(width) - 790.0f, 180.0f, 250.0f);
+        RectF notification(notificationX, 16, notificationWidth, 36);
+        const float notificationHover = activeHoverProgress(Action::HeaderUpdate);
+        const Color notificationBackground = lightTheme()
+            ? Color(255, 255, 244, 218)
+            : Color(255, 41, 35, 58);
+        const Color notificationBorder = lightTheme()
+            ? Color(255, 235, 181, 72)
+            : Color(255, 111, 79, 153);
+        const Color notificationText = lightTheme()
+            ? Color(255, 108, 70, 19)
+            : Color(255, 246, 226, 255);
+        fillRound(graphics, notification, 11, notificationBackground);
+        if (notificationHover > 0) fillRound(graphics, notification, 11, accentColor(static_cast<BYTE>(42.0f * notificationHover)));
+        strokeRound(graphics, notification, 11, notificationBorder, notificationHover > 0 ? 1.5f : 1.0f);
+        SolidBrush notificationDot(installerReady ? Color(255, 111, 229, 184) : accentColor());
+        graphics.FillEllipse(&notificationDot, RectF(notification.X + 10, notification.Y + 13, 10, 10));
+        const std::wstring notificationTitle = installerReady
+            ? localized(L"Mise à jour prête", L"Update ready", L"Update bereit", L"更新已就绪")
+            : localized(L"Mise à jour disponible", L"Update available", L"Update verfügbar", L"发现更新");
+        text(graphics, notificationTitle, RectF(notification.X + 26, notification.Y + 2, notification.Width - 72, 17),
+             8.5f, notificationText, FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
+        const std::wstring notificationVersion = g_availableVersion.empty() ? L"" : (L"v" + g_availableVersion);
+        text(graphics, notificationVersion, RectF(notification.GetRight() - 48, notification.Y + 2, 40, 17),
+             8.0f, notificationText, FontStyleBold, StringAlignmentFar, StringAlignmentCenter);
+        text(graphics, localized(L"Cliquer pour ouvrir les paramètres", L"Click to open Settings",
+                                 L"Klicken für Einstellungen", L"点击打开设置"),
+             RectF(notification.X + 26, notification.Y + 18, notification.Width - 34, 14),
+             7.0f, lightTheme() ? Color(255, 142, 108, 38) : Color(255, 187, 165, 213),
+             FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
+        addHit(notification, Action::HeaderUpdate);
+    }
 
     if (updateReady) {
         RectF updatePill(controls.X - 58, 16, 46, 36);
@@ -4597,11 +4655,13 @@ void drawHeaderTooltip(Graphics& graphics, int width) {
     switch (g_hoverAction) {
         case Action::HeaderStatus:
             label = localized(L"Ouvrir le diagnostic matériel", L"Open hardware diagnostics", L"Hardwarediagnose öffnen", L"打开硬件诊断");
-            anchor = controlsX - (!g_downloadedUpdate.empty() ? 200.0f : 146.0f);
+            anchor = controlsX - (g_updateAvailable || !g_downloadedUpdate.empty() ? 200.0f : 146.0f);
             tooltipWidth = 205;
             break;
         case Action::HeaderUpdate:
-            label = localized(L"Mise à jour prête", L"Update ready", L"Update bereit", L"更新已就绪");
+            label = g_downloadedUpdate.empty()
+                ? localized(L"Nouvelle mise à jour disponible", L"New update available", L"Neues Update verfügbar", L"有新的更新")
+                : localized(L"Mise à jour prête", L"Update ready", L"Update bereit", L"更新已就绪");
             anchor = controlsX - 35.0f;
             tooltipWidth = 132;
             break;
@@ -9465,8 +9525,12 @@ int createInterfaceCaptures(const fs::path& destination) {
     ok = savePageCapture(Page::Dashboard, 1020, 680, destination / L"window-controls-close-hover.png") && ok;
     g_hoverAction = Action::None;
     g_downloadedUpdate = destination / L"RGBCcontrol-Setup-new.exe";
+    g_updateAvailable = true;
+    g_availableVersion = L"0.16.24";
     ok = savePageCapture(Page::Dashboard, 1020, 680, destination / L"header-update-ready.png") && ok;
     g_downloadedUpdate.clear();
+    g_updateAvailable = false;
+    g_availableVersion.clear();
     ok = savePageCapture(Page::Effects, 1020, 680, destination / L"effects-small.png") && ok;
     g_selectedEffect = 7;
     g_effectActive = true;
@@ -10262,6 +10326,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             g_launchAnimationFinished = g_startHidden || g_reduceMotion || g_justUpdated;
             g_lastAmbientFrameAt = g_launchAnimationStartedAt;
             g_lastEffectUiFrameAt = g_launchAnimationStartedAt;
+            g_lastUpdateCheckAt = g_launchAnimationStartedAt;
             addTrayIcon(window);
             {
                 DEV_BROADCAST_DEVICEINTERFACE_W filter{};
@@ -10360,6 +10425,13 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 } else if (!certificationBusy && !g_hotplugScanPending && !g_scanInFlight &&
                            now - g_lastScan >= static_cast<ULONGLONG>(g_detectionIntervalSeconds) * 1000ULL) {
                     startScan(false);
+                }
+                const ULONGLONG updateInterval = g_updateAvailabilityChecked ? 30ULL * 60ULL * 1000ULL : 8000ULL;
+                if (!g_updateInFlight && !g_updateAvailable && g_downloadedUpdate.empty() &&
+                    now - g_lastUpdateCheckAt >= updateInterval) {
+                    g_updateAvailabilityChecked = true;
+                    g_lastUpdateCheckAt = now;
+                    startUpdateCheck(false);
                 }
                 const bool headerAnimating = !g_reduceMotion && (g_scanInFlight.load() ||
                     (g_headerStatusChangedAt != 0 && now - g_headerStatusChangedAt < 1400) ||
@@ -10508,6 +10580,8 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             g_updateInFlight = false;
             if (result) {
                 g_updateStatus = std::move(result->status);
+                g_updateAvailable = result->available || !result->installer.empty();
+                g_availableVersion = std::move(result->version);
                 g_downloadedUpdate = std::move(result->installer);
                 if (!g_downloadedUpdate.empty() && fs::exists(g_downloadedUpdate)) {
                     g_updateStatus = localized(L"Mise à jour vérifiée. Installation automatique...",

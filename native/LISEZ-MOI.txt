@@ -1,5 +1,13 @@
-RGBCcontrol 0.16.23 — application native C++ pour Windows
+RGBCcontrol 0.16.24 — application native C++ pour Windows
 =====================================================
+
+Mise à jour 0.16.24
+--------------------
+L'application vérifie automatiquement le canal officiel après son lancement,
+sans télécharger ni installer quoi que ce soit en arrière-plan. Lorsqu'une
+version plus récente est publiée, une notification apparaît en haut à gauche
+de l'en-tête avec le numéro de version. Un clic ouvre directement les
+Paramètres pour lancer le téléchargement vérifié et l'installation.
 
 Installation
 ------------

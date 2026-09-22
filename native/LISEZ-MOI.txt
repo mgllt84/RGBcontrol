@@ -1,4 +1,4 @@
-RGBCcontrol 0.16.22 — application native C++ pour Windows
+RGBCcontrol 0.16.23 — application native C++ pour Windows
 =====================================================
 
 Installation
@@ -401,6 +401,26 @@ Le démarrage discret, la réduction dans la zone de notification, la fermeture
 dans cette zone, la mémorisation de la dernière page et la réduction des
 animations de l’interface sont configurables séparément. La réinitialisation
 des préférences ne supprime jamais les profils RGB ni les courbes de ventilation.
+
+Confort quotidien — version 0.16.23
+-----------------------------------
+Trois profils favoris sont accessibles depuis l’accueil, la zone de notification
+et les raccourcis Ctrl+Alt+1, Ctrl+Alt+2 et Ctrl+Alt+3. Ctrl+Alt+L coupe ou
+restaure l’éclairage et Ctrl+Alt+U annule la dernière application importante.
+
+Chaque profil peut être associé à un exécutable : il est appliqué lorsque le jeu
+devient actif, puis l’état précédent est restauré en le quittant. Les LED peuvent
+s’éteindre au verrouillage ou à la veille et retrouver exactement leur état au
+retour. Le mode intelligent allège les effets quand la température dépasse 80 °C.
+
+La DualSense peut activer automatiquement la conversion XInput à la connexion.
+Cette priorité simplifie le passage manette/clavier ; le masquage physique HID
+reste dépendant d’un pilote spécialisé et n’est pas simulé par l’application.
+
+La page Paramètres ajoute trois tailles de texte, un contraste renforcé, un
+accueil compact et une sauvegarde complète des réglages, profils et certifications.
+Le Diagnostic conserve jusqu’aux 180 dernières mesures CPU, GPU et ventilation,
+affiche leur évolution et propose une recommandation guidée.
 
 Limites matérielles
 -------------------

@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cwctype>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -53,10 +54,26 @@ constexpr UINT WM_CERTIFICATION_COMPLETE = WM_APP + 6;
 constexpr UINT_PTR APP_TIMER = 7;
 constexpr UINT TRAY_SHOW = 4101;
 constexpr UINT TRAY_PROFILE_FIRST = 4110;
+constexpr UINT TRAY_LIGHTS_TOGGLE = 4120;
+constexpr UINT TRAY_BRIGHTNESS_DOWN = 4121;
+constexpr UINT TRAY_BRIGHTNESS_UP = 4122;
+constexpr UINT TRAY_FAN_QUIET = 4130;
+constexpr UINT TRAY_FAN_BALANCED = 4131;
+constexpr UINT TRAY_FAN_PERFORMANCE = 4132;
+constexpr UINT TRAY_UNDO = 4140;
+constexpr UINT TRAY_THEME = 4141;
 constexpr UINT TRAY_EXIT = 4199;
+constexpr int HOTKEY_PROFILE_1 = 5101;
+constexpr int HOTKEY_PROFILE_2 = 5102;
+constexpr int HOTKEY_PROFILE_3 = 5103;
+constexpr int HOTKEY_LIGHTS = 5110;
+constexpr int HOTKEY_UNDO = 5111;
+constexpr UINT WM_WTSSESSION_CHANGE_MESSAGE = 0x02B1;
+constexpr WPARAM WTS_SESSION_LOCK_VALUE = 0x7;
+constexpr WPARAM WTS_SESSION_UNLOCK_VALUE = 0x8;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.22";
+constexpr wchar_t kAppVersion[] = L"0.16.23";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -74,6 +91,10 @@ enum class Action {
     FanSlider, FanApply, FanAuto, FanProfileAuto, FanProfileQuiet, FanProfileBalanced,
     FanProfilePerformance, FanAdmin, FanCurveToggle, FanCurvePreset, FanCurvePoint,
     ProfileSave, ProfileLoad, ProfileDelete, ProfileExport, ProfileImport, DiagnosticCopy,
+    FavoriteProfile, QuickLightsToggle, UndoLastChange,
+    ToggleApplicationProfiles, BindApplicationProfile, ClearApplicationProfile,
+    ToggleGlobalHotkeys, ToggleSleepLights, ToggleRestoreOnWake, ToggleSmartMode,
+    BackupAll, RestoreAll, SelectTextScale, ToggleHighContrast, ToggleCompactDashboard, ClearTelemetry,
     ToggleStartup, ToggleMinimizeToTray, ScheduleToggle, ScheduleDayProfile, ScheduleNightProfile,
     ScheduleDayHourDown, ScheduleDayHourUp, ScheduleNightHourDown, ScheduleNightHourUp,
     SelectLanguage, SelectTheme, Update, SelectAccent, SelectScanInterval, SelectEffectQuality,
@@ -83,7 +104,7 @@ enum class Action {
     DuckyCalibrationNextMode, DuckyCalibrationRestart, CompatibilityBack, CompatibilityRun,
     CertificationStart, CertificationYes, CertificationNo,
     GamepadTogglePlayerLeds, GamepadApplyColor, GamepadUseNative, GamepadUseXbox,
-    GamepadRotate, GamepadResetView
+    GamepadToggleAutoPriority, GamepadRotate, GamepadResetView
 };
 
 struct HitTarget {
@@ -360,6 +381,9 @@ bool g_xboxBridgeEverReady = false;
 bool parseDualSenseInputReport(const BYTE* report, std::size_t size, bool bluetooth, bool edge,
                                DualSenseLiveState& state);
 bool updateDualSenseVisualAxes(ULONGLONG now, bool snap = false);
+void applyWindowChromeTheme();
+void saveTelemetryHistory();
+void loadTelemetryHistory();
 bool g_openRgbReady = false;
 bool g_isAdministrator = false;
 std::uint32_t g_baseColor = 0x7C5CFF;
@@ -469,6 +493,46 @@ int g_lastScheduledProfile = -1;
 ULONGLONG g_lastScheduleCheck = 0;
 bool g_hasCompletedScan = false;
 std::wstring g_scheduleStatus;
+bool g_applicationProfilesEnabled = true;
+std::array<std::wstring, 3> g_profileApplications;
+int g_activeApplicationProfile = -1;
+std::wstring g_activeApplicationExecutable;
+AppProfile g_applicationRestoreProfile;
+bool g_applicationRestoreReady = false;
+ULONGLONG g_lastApplicationProfileCheck = 0;
+bool g_globalHotkeysEnabled = true;
+bool g_sleepLightsEnabled = true;
+bool g_restoreOnWake = true;
+bool g_smartModeEnabled = false;
+bool g_smartThrottleActive = false;
+int g_smartSavedEffectQuality = 1;
+ULONGLONG g_lastSmartModeCheck = 0;
+bool g_gamepadAutoPriority = true;
+int g_textScale = 1;
+bool g_highContrast = false;
+bool g_compactDashboard = false;
+AppProfile g_undoProfile;
+bool g_hasUndoProfile = false;
+bool g_restoringSnapshot = false;
+AppProfile g_lastAppliedLightingProfile;
+bool g_lastAppliedLightingKnown = false;
+AppProfile g_sleepRestoreProfile;
+bool g_sleepRestoreReady = false;
+bool g_quickLightsOff = false;
+AppProfile g_quickLightsRestoreProfile;
+std::wstring g_comfortStatus;
+struct TelemetrySample {
+    ULONGLONG timestamp = 0;
+    double cpu = -1;
+    double gpu = -1;
+    double fanRpm = -1;
+};
+std::deque<TelemetrySample> g_telemetry;
+ULONGLONG g_lastTelemetryPersist = 0;
+HMODULE g_wtsLibrary = nullptr;
+using WtsRegisterSessionNotificationFn = BOOL (WINAPI*)(HWND, DWORD);
+using WtsUnregisterSessionNotificationFn = BOOL (WINAPI*)(HWND);
+WtsUnregisterSessionNotificationFn g_wtsUnregisterSessionNotification = nullptr;
 HDEVNOTIFY g_deviceNotification = nullptr;
 bool g_hotplugMonitoring = false;
 bool g_hotplugScanPending = false;
@@ -1063,13 +1127,17 @@ int readIniInteger(const fs::path& path, const std::wstring& section, const wcha
 }
 
 std::wstring readIniText(const fs::path& path, const std::wstring& section, const wchar_t* key) {
-    std::vector<wchar_t> buffer(16384);
+    std::vector<wchar_t> buffer(1024 * 1024);
     GetPrivateProfileStringW(section.c_str(), key, L"", buffer.data(), static_cast<DWORD>(buffer.size()), path.c_str());
     return buffer.data();
 }
 
 fs::path certificationStorePath(bool createDirectory = true) {
     return profileStorePath(createDirectory).parent_path() / L"certifications.ini";
+}
+
+fs::path telemetryStorePath(bool createDirectory = true) {
+    return profileStorePath(createDirectory).parent_path() / L"hardware-history.csv";
 }
 
 std::wstring certificationFingerprint(const RgbDevice& device) {
@@ -1194,6 +1262,21 @@ AppProfile captureCurrentProfile() {
     profile.curveSpeeds = g_curveSpeeds;
     profile.selectedDevices = serializedSelectedDevices();
     profile.fanValues = serializedFanValues();
+    return profile;
+}
+
+AppProfile captureAppliedState() {
+    AppProfile profile = captureCurrentProfile();
+    if (!g_lastAppliedLightingKnown) return profile;
+    profile.color = g_lastAppliedLightingProfile.color;
+    profile.brightness = g_lastAppliedLightingProfile.brightness;
+    profile.effect = g_lastAppliedLightingProfile.effect;
+    profile.effectSpeed = g_lastAppliedLightingProfile.effectSpeed;
+    profile.effectIntensity = g_lastAppliedLightingProfile.effectIntensity;
+    profile.ambientSaturation = g_lastAppliedLightingProfile.ambientSaturation;
+    profile.ambientMonitor = g_lastAppliedLightingProfile.ambientMonitor;
+    profile.ambientZones = g_lastAppliedLightingProfile.ambientZones;
+    profile.selectedDevices = g_lastAppliedLightingProfile.selectedDevices;
     return profile;
 }
 
@@ -1327,6 +1410,19 @@ void saveAutomationSettings() {
     writeIniInteger(path, section, L"NightHour", g_scheduleNightHour);
     writeIniInteger(path, section, L"DayProfile", g_scheduleDayProfile);
     writeIniInteger(path, section, L"NightProfile", g_scheduleNightProfile);
+    writeIniInteger(path, section, L"ApplicationProfiles", g_applicationProfilesEnabled ? 1 : 0);
+    writeIniInteger(path, section, L"GlobalHotkeys", g_globalHotkeysEnabled ? 1 : 0);
+    writeIniInteger(path, section, L"SleepLights", g_sleepLightsEnabled ? 1 : 0);
+    writeIniInteger(path, section, L"RestoreOnWake", g_restoreOnWake ? 1 : 0);
+    writeIniInteger(path, section, L"SmartMode", g_smartModeEnabled ? 1 : 0);
+    writeIniInteger(path, section, L"GamepadAutoPriority", g_gamepadAutoPriority ? 1 : 0);
+    writeIniInteger(path, section, L"TextScale", g_textScale);
+    writeIniInteger(path, section, L"HighContrast", g_highContrast ? 1 : 0);
+    writeIniInteger(path, section, L"CompactDashboard", g_compactDashboard ? 1 : 0);
+    for (int index = 0; index < static_cast<int>(g_profileApplications.size()); ++index) {
+        const std::wstring key = L"ProfileApplication" + std::to_wstring(index + 1);
+        WritePrivateProfileStringW(section.c_str(), key.c_str(), g_profileApplications[index].c_str(), path.c_str());
+    }
     WritePrivateProfileStringW(nullptr, nullptr, nullptr, path.c_str());
 }
 
@@ -1356,6 +1452,19 @@ void loadAutomationSettings() {
     g_scheduleNightHour = std::clamp(readIniInteger(path, section, L"NightHour", 22), 0, 23);
     g_scheduleDayProfile = std::clamp(readIniInteger(path, section, L"DayProfile", 0), 0, 2);
     g_scheduleNightProfile = std::clamp(readIniInteger(path, section, L"NightProfile", 2), 0, 2);
+    g_applicationProfilesEnabled = readIniInteger(path, section, L"ApplicationProfiles", 1) != 0;
+    g_globalHotkeysEnabled = readIniInteger(path, section, L"GlobalHotkeys", 1) != 0;
+    g_sleepLightsEnabled = readIniInteger(path, section, L"SleepLights", 1) != 0;
+    g_restoreOnWake = readIniInteger(path, section, L"RestoreOnWake", 1) != 0;
+    g_smartModeEnabled = readIniInteger(path, section, L"SmartMode", 0) != 0;
+    g_gamepadAutoPriority = readIniInteger(path, section, L"GamepadAutoPriority", 1) != 0;
+    g_textScale = std::clamp(readIniInteger(path, section, L"TextScale", 1), 0, 2);
+    g_highContrast = readIniInteger(path, section, L"HighContrast", 0) != 0;
+    g_compactDashboard = readIniInteger(path, section, L"CompactDashboard", 0) != 0;
+    for (int index = 0; index < static_cast<int>(g_profileApplications.size()); ++index) {
+        const std::wstring key = L"ProfileApplication" + std::to_wstring(index + 1);
+        g_profileApplications[index] = readIniText(path, section, key.c_str());
+    }
 }
 
 bool selectProfileFile(bool save, fs::path& path) {
@@ -1373,6 +1482,125 @@ bool selectProfileFile(bool save, fs::path& path) {
     if (!accepted) return false;
     path = filename;
     return true;
+}
+
+bool selectBackupFile(bool save, fs::path& path) {
+    wchar_t filename[MAX_PATH] = L"RGBCcontrol-Complete.rgbcbackup";
+    const wchar_t filter[] = L"Sauvegarde RGBCcontrol (*.rgbcbackup)\0*.rgbcbackup\0Tous les fichiers (*.*)\0*.*\0\0";
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = g_window;
+    dialog.lpstrFilter = filter;
+    dialog.lpstrFile = filename;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrDefExt = L"rgbcbackup";
+    dialog.Flags = OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+    const BOOL accepted = save ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog);
+    if (!accepted) return false;
+    path = filename;
+    return true;
+}
+
+bool selectExecutableFile(fs::path& path) {
+    wchar_t filename[MAX_PATH]{};
+    const wchar_t filter[] = L"Applications Windows (*.exe)\0*.exe\0Tous les fichiers (*.*)\0*.*\0\0";
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = g_window;
+    dialog.lpstrFilter = filter;
+    dialog.lpstrFile = filename;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrDefExt = L"exe";
+    dialog.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameW(&dialog)) return false;
+    path = filename;
+    return true;
+}
+
+std::wstring base64File(const fs::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return {};
+    std::vector<BYTE> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    if (bytes.empty()) return {};
+    DWORD characters = 0;
+    if (!CryptBinaryToStringW(bytes.data(), static_cast<DWORD>(bytes.size()),
+                              CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &characters)) return {};
+    std::wstring encoded(characters, L'\0');
+    if (!CryptBinaryToStringW(bytes.data(), static_cast<DWORD>(bytes.size()),
+                              CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, encoded.data(), &characters)) return {};
+    if (!encoded.empty() && encoded.back() == L'\0') encoded.pop_back();
+    return encoded;
+}
+
+bool restoreBase64File(const std::wstring& encoded, const fs::path& path) {
+    if (encoded.empty()) return true;
+    DWORD bytes = 0;
+    if (!CryptStringToBinaryW(encoded.c_str(), static_cast<DWORD>(encoded.size()), CRYPT_STRING_BASE64,
+                              nullptr, &bytes, nullptr, nullptr)) return false;
+    std::vector<BYTE> decoded(bytes);
+    if (!CryptStringToBinaryW(encoded.c_str(), static_cast<DWORD>(encoded.size()), CRYPT_STRING_BASE64,
+                              decoded.data(), &bytes, nullptr, nullptr)) return false;
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(decoded.data()), bytes);
+    return output.good();
+}
+
+void exportCompleteBackup() {
+    fs::path destination;
+    if (!selectBackupFile(true, destination)) return;
+    saveAutomationSettings();
+    saveTelemetryHistory();
+    const fs::path source = profileStorePath(true);
+    std::error_code error;
+    fs::copy_file(source, destination, fs::copy_options::overwrite_existing, error);
+    if (error) {
+        g_comfortStatus = localized(L"Impossible de créer la sauvegarde complète.", L"Could not create the complete backup.",
+                                    L"Die vollständige Sicherung konnte nicht erstellt werden.", L"无法创建完整备份。");
+        return;
+    }
+    WritePrivateProfileStringW(L"Backup", L"Version", kAppVersion, destination.c_str());
+    writeIniInteger(destination, L"Backup", L"Language", static_cast<int>(g_language));
+    const std::wstring certifications = base64File(certificationStorePath(false));
+    const std::wstring telemetry = base64File(telemetryStorePath(false));
+    WritePrivateProfileStringW(L"Backup", L"Certifications", certifications.c_str(), destination.c_str());
+    WritePrivateProfileStringW(L"Backup", L"Telemetry", telemetry.c_str(), destination.c_str());
+    WritePrivateProfileStringW(nullptr, nullptr, nullptr, destination.c_str());
+    g_comfortStatus = localized(L"Sauvegarde complète créée.", L"Complete backup created.",
+                                L"Vollständige Sicherung erstellt.", L"已创建完整备份。");
+}
+
+void importCompleteBackup() {
+    fs::path source;
+    if (!selectBackupFile(false, source)) return;
+    if (readIniText(source, L"Backup", L"Version").empty()) {
+        g_comfortStatus = localized(L"Ce fichier n'est pas une sauvegarde complète RGBCcontrol.",
+                                    L"This file is not a complete RGBCcontrol backup.",
+                                    L"Diese Datei ist keine vollständige RGBCcontrol-Sicherung.",
+                                    L"此文件不是完整的 RGBCcontrol 备份。");
+        return;
+    }
+    const std::wstring certifications = readIniText(source, L"Backup", L"Certifications");
+    const std::wstring telemetry = readIniText(source, L"Backup", L"Telemetry");
+    const int language = std::clamp(readIniInteger(source, L"Backup", L"Language", 0), 0, 3);
+    const fs::path destination = profileStorePath(true);
+    std::error_code error;
+    fs::copy_file(source, destination, fs::copy_options::overwrite_existing, error);
+    if (error || !restoreBase64File(certifications, certificationStorePath(true)) ||
+        !restoreBase64File(telemetry, telemetryStorePath(true))) {
+        g_comfortStatus = localized(L"La restauration n'a pas pu être terminée.", L"The restore could not be completed.",
+                                    L"Die Wiederherstellung konnte nicht abgeschlossen werden.", L"无法完成恢复。");
+        return;
+    }
+    g_language = static_cast<Language>(language);
+    saveLanguage();
+    loadStoredProfiles();
+    loadAutomationSettings();
+    loadTelemetryHistory();
+    applyWindowChromeTheme();
+    g_comfortStatus = localized(L"Réglages, profils et certifications restaurés.",
+                                L"Settings, profiles, and certifications restored.",
+                                L"Einstellungen, Profile und Zertifizierungen wiederhergestellt.",
+                                L"设置、模式和认证已恢复。");
 }
 
 std::wstring readIniValue(const fs::path& path, const wchar_t* key) {
@@ -1588,10 +1816,12 @@ bool lightTheme() {
 }
 
 Color primaryTextColor(BYTE alpha = 255) {
+    if (g_highContrast) return lightTheme() ? Color(alpha, 0, 0, 0) : Color(alpha, 255, 255, 255);
     return lightTheme() ? Color(alpha, 25, 31, 45) : Color(alpha, 244, 246, 251);
 }
 
 Color secondaryTextColor(BYTE alpha = 255) {
+    if (g_highContrast) return lightTheme() ? Color(alpha, 45, 50, 60) : Color(alpha, 205, 211, 224);
     return lightTheme() ? Color(alpha, 91, 103, 126) : Color(alpha, 143, 152, 174);
 }
 
@@ -2022,12 +2252,14 @@ void drawCachedText(Graphics& graphics, const std::wstring& value, const RectF& 
 void text(Graphics& graphics, const std::wstring& value, const RectF& rect, float size,
           Color color, FontStyle style = FontStyleRegular, StringAlignment horizontal = StringAlignmentNear,
           StringAlignment vertical = StringAlignmentNear) {
-    drawCachedText(graphics, value, rect, size, themeTextColor(color), style, horizontal, vertical, false);
+    const float scale = g_textScale == 0 ? 0.94f : g_textScale == 2 ? 1.08f : 1.0f;
+    drawCachedText(graphics, value, rect, size * scale, themeTextColor(color), style, horizontal, vertical, false);
 }
 
 void textWrapped(Graphics& graphics, const std::wstring& value, const RectF& rect, float size,
                  Color color, FontStyle style = FontStyleRegular, StringAlignment vertical = StringAlignmentNear) {
-    drawCachedText(graphics, value, rect, size, themeTextColor(color), style, StringAlignmentNear, vertical, true);
+    const float scale = g_textScale == 0 ? 0.94f : g_textScale == 2 ? 1.08f : 1.0f;
+    drawCachedText(graphics, value, rect, size * scale, themeTextColor(color), style, StringAlignmentNear, vertical, true);
 }
 
 void addHit(const RectF& rect, Action action, int index = -1, std::uint32_t value = 0) {
@@ -2738,6 +2970,9 @@ void applyStaticColor() {
         InvalidateRect(g_window, nullptr, FALSE);
         return;
     }
+    g_lastAppliedLightingProfile = captureCurrentProfile();
+    g_lastAppliedLightingProfile.effect = 0;
+    g_lastAppliedLightingKnown = true;
     g_effectActive = false;
     g_activeEffectIndex = 0;
     if (g_effectThread.joinable()) g_effectThread.join();
@@ -3039,6 +3274,9 @@ void startEffect() {
         return;
     }
     if (g_selectedEffect == 0) { applyStaticColor(); return; }
+    g_lastAppliedLightingProfile = captureCurrentProfile();
+    g_lastAppliedLightingProfile.effect = g_selectedEffect;
+    g_lastAppliedLightingKnown = true;
     g_effectActive = false;
     if (g_effectThread.joinable()) g_effectThread.join();
     std::vector<RgbDevice> devices = g_rgbDevices;
@@ -3632,6 +3870,204 @@ void applyProfileSlot(int index, bool allowElevation = true) {
     }
 }
 
+void applyProfileSnapshot(const AppProfile& profile) {
+    g_restoringSnapshot = true;
+    applyProfileState(profile);
+    if (g_selectedEffect == 0) applyStaticColor(); else startEffect();
+    if (g_isAdministrator) {
+        if (g_fanCurveEnabled) applyFanCurve(true);
+        else if (g_fanProfile != FanProfile::Custom) applyFanProfile(fanProfileAction(static_cast<int>(g_fanProfile)));
+        else {
+            for (int index = 0; index < static_cast<int>(g_fans.size()); ++index) {
+                const int value = serializedFanValue(profile.fanValues, g_fans[index].encodedId);
+                if (value < 0) continue;
+                g_fans[index].desired = std::max(g_fans[index].minimum, value);
+                changeFan(index, false);
+            }
+        }
+    }
+    g_restoringSnapshot = false;
+}
+
+void rememberUndoSnapshot() {
+    if (g_restoringSnapshot) return;
+    g_undoProfile = captureAppliedState();
+    g_hasUndoProfile = true;
+}
+
+void restoreUndoSnapshot() {
+    if (!g_hasUndoProfile) {
+        g_comfortStatus = localized(L"Aucune modification à annuler.", L"There is no change to undo.",
+                                    L"Keine Änderung zum Rückgängigmachen.", L"没有可撤销的更改。");
+        return;
+    }
+    const AppProfile current = captureAppliedState();
+    applyProfileSnapshot(g_undoProfile);
+    g_undoProfile = current;
+    g_hasUndoProfile = true;
+    g_activeProfile = -1;
+    g_quickLightsOff = false;
+    g_comfortStatus = localized(L"La dernière modification a été annulée.", L"The last change was undone.",
+                                L"Die letzte Änderung wurde rückgängig gemacht.", L"已撤销上次更改。");
+}
+
+void toggleQuickLights() {
+    if (!g_quickLightsOff) {
+        rememberUndoSnapshot();
+        g_quickLightsRestoreProfile = captureAppliedState();
+        g_brightness = 0;
+        applyStaticColor();
+        g_quickLightsOff = true;
+        g_comfortStatus = localized(L"Toutes les lumières ont été coupées.", L"All lights were turned off.",
+                                    L"Alle Lichter wurden ausgeschaltet.", L"所有灯光均已关闭。");
+    } else {
+        applyProfileSnapshot(g_quickLightsRestoreProfile);
+        g_quickLightsOff = false;
+        g_comfortStatus = localized(L"L'éclairage précédent a été restauré.", L"The previous lighting was restored.",
+                                    L"Die vorherige Beleuchtung wurde wiederhergestellt.", L"已恢复之前的灯光。");
+    }
+}
+
+std::wstring normalizedExecutableName(const std::wstring& path) {
+    std::wstring result = fs::path(path).filename().wstring();
+    std::transform(result.begin(), result.end(), result.begin(), [](wchar_t character) {
+        return static_cast<wchar_t>(towlower(character));
+    });
+    return result;
+}
+
+std::wstring foregroundExecutableName() {
+    HWND foreground = GetForegroundWindow();
+    if (!foreground) return {};
+    if (foreground == g_window) return g_activeApplicationExecutable;
+    DWORD processId = 0;
+    GetWindowThreadProcessId(foreground, &processId);
+    if (!processId) return {};
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process) return {};
+    std::vector<wchar_t> path(32768);
+    DWORD length = static_cast<DWORD>(path.size());
+    const bool ok = QueryFullProcessImageNameW(process, 0, path.data(), &length) != FALSE;
+    CloseHandle(process);
+    return ok ? normalizedExecutableName(std::wstring(path.data(), length)) : std::wstring{};
+}
+
+void evaluateApplicationProfiles(bool force = false) {
+    if (!g_applicationProfilesEnabled || !g_hasCompletedScan) return;
+    const std::wstring executable = foregroundExecutableName();
+    if (!force && executable == g_activeApplicationExecutable) return;
+    g_activeApplicationExecutable = executable;
+    int match = -1;
+    for (int index = 0; index < static_cast<int>(g_profileApplications.size()); ++index) {
+        if (!g_profileApplications[index].empty() && normalizedExecutableName(g_profileApplications[index]) == executable &&
+            g_profiles[index].saved) {
+            match = index;
+            break;
+        }
+    }
+    if (match >= 0) {
+        if (g_activeApplicationProfile < 0) {
+            g_applicationRestoreProfile = captureAppliedState();
+            g_applicationRestoreReady = true;
+        }
+        if (match != g_activeApplicationProfile) {
+            applyProfileSlot(match, false);
+            g_activeApplicationProfile = match;
+            g_comfortStatus = std::wstring(localized(L"Profil appliqué automatiquement pour ", L"Profile automatically applied for ",
+                                                         L"Profil automatisch angewendet für ", L"已为应用自动应用模式：")) + executable;
+        }
+    } else if (g_activeApplicationProfile >= 0) {
+        if (g_applicationRestoreReady) applyProfileSnapshot(g_applicationRestoreProfile);
+        g_activeApplicationProfile = -1;
+        g_applicationRestoreReady = false;
+        g_comfortStatus = localized(L"Profil précédent restauré après la fermeture du jeu.",
+                                    L"Previous profile restored after leaving the game.",
+                                    L"Vorheriges Profil nach dem Spiel wiederhergestellt.",
+                                    L"退出游戏后已恢复之前的模式。");
+    }
+}
+
+void evaluateSmartMode() {
+    if (!g_smartModeEnabled) return;
+    const double hottest = std::max(g_cpuTemperature, g_gpuTemperature);
+    if (hottest < 0) return;
+    if (g_isAdministrator && g_fanCurveEnabled) applyFanCurve(false);
+    if (hottest >= 80.0 && !g_smartThrottleActive) {
+        g_smartSavedEffectQuality = g_effectQuality.load();
+        g_effectQuality = 0;
+        g_smartThrottleActive = true;
+        g_comfortStatus = localized(L"Mode intelligent : animations allégées pendant la chauffe.",
+                                    L"Smart mode: effects reduced while temperatures are high.",
+                                    L"Smart-Modus: Effekte bei hoher Temperatur reduziert.",
+                                    L"智能模式：高温时已降低灯效负载。");
+    } else if (hottest <= 72.0 && g_smartThrottleActive) {
+        g_effectQuality = std::clamp(g_smartSavedEffectQuality, 0, 2);
+        g_smartThrottleActive = false;
+        g_comfortStatus = localized(L"Mode intelligent : performances normales restaurées.",
+                                    L"Smart mode: normal performance restored.",
+                                    L"Smart-Modus: normale Leistung wiederhergestellt.",
+                                    L"智能模式：已恢复正常性能。");
+    }
+}
+
+void handleAwayState(bool away) {
+    if (away) {
+        if (!g_sleepLightsEnabled || g_sleepRestoreReady) return;
+        g_sleepRestoreProfile = captureAppliedState();
+        g_sleepRestoreReady = true;
+        g_brightness = 0;
+        applyStaticColor();
+    } else if (g_sleepRestoreReady) {
+        if (g_restoreOnWake) applyProfileSnapshot(g_sleepRestoreProfile);
+        g_sleepRestoreReady = false;
+    }
+}
+
+void saveTelemetryHistory() {
+    const fs::path path = telemetryStorePath(true);
+    std::ofstream output(path, std::ios::trunc);
+    if (!output) return;
+    output << "cpu,gpu,fan_rpm\n";
+    output << std::fixed << std::setprecision(2);
+    for (const TelemetrySample& sample : g_telemetry) {
+        output << sample.cpu << ',' << sample.gpu << ',' << sample.fanRpm << '\n';
+    }
+    g_lastTelemetryPersist = GetTickCount64();
+}
+
+void loadTelemetryHistory() {
+    std::ifstream input(telemetryStorePath(false));
+    if (!input) return;
+    std::string line;
+    std::getline(input, line);
+    g_telemetry.clear();
+    ULONGLONG timestamp = GetTickCount64();
+    while (std::getline(input, line)) {
+        std::replace(line.begin(), line.end(), ',', ' ');
+        std::istringstream values(line);
+        TelemetrySample sample;
+        if (!(values >> sample.cpu >> sample.gpu >> sample.fanRpm)) continue;
+        sample.timestamp = timestamp++;
+        g_telemetry.push_back(sample);
+        if (g_telemetry.size() > 180) g_telemetry.pop_front();
+    }
+    g_lastTelemetryPersist = GetTickCount64();
+}
+
+void recordTelemetrySample() {
+    double totalRpm = 0.0;
+    int rpmCount = 0;
+    for (const FanDevice& fan : g_fans) {
+        if (fan.rpm < 0) continue;
+        totalRpm += fan.rpm;
+        ++rpmCount;
+    }
+    g_telemetry.push_back({GetTickCount64(), g_cpuTemperature, g_gpuTemperature,
+                           rpmCount > 0 ? totalRpm / rpmCount : -1.0});
+    while (g_telemetry.size() > 180) g_telemetry.pop_front();
+    if (GetTickCount64() - g_lastTelemetryPersist >= 60000) saveTelemetryHistory();
+}
+
 void exportCurrentProfile() {
     fs::path path;
     if (!selectProfileFile(true, path)) return;
@@ -3720,18 +4156,67 @@ void showMainWindow() {
     SetForegroundWindow(g_window);
 }
 
+void unregisterGlobalHotkeys() {
+    if (!g_window) return;
+    UnregisterHotKey(g_window, HOTKEY_PROFILE_1);
+    UnregisterHotKey(g_window, HOTKEY_PROFILE_2);
+    UnregisterHotKey(g_window, HOTKEY_PROFILE_3);
+    UnregisterHotKey(g_window, HOTKEY_LIGHTS);
+    UnregisterHotKey(g_window, HOTKEY_UNDO);
+}
+
+void refreshGlobalHotkeys() {
+    unregisterGlobalHotkeys();
+    if (!g_globalHotkeysEnabled || !g_window) return;
+    const bool ok = RegisterHotKey(g_window, HOTKEY_PROFILE_1, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, '1') &&
+                    RegisterHotKey(g_window, HOTKEY_PROFILE_2, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, '2') &&
+                    RegisterHotKey(g_window, HOTKEY_PROFILE_3, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, '3') &&
+                    RegisterHotKey(g_window, HOTKEY_LIGHTS, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'L') &&
+                    RegisterHotKey(g_window, HOTKEY_UNDO, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'U');
+    if (!ok) {
+        unregisterGlobalHotkeys();
+        g_globalHotkeysEnabled = false;
+        g_comfortStatus = localized(L"Certains raccourcis sont déjà utilisés par une autre application.",
+                                    L"Some shortcuts are already used by another application.",
+                                    L"Einige Tastenkürzel werden bereits von einer anderen Anwendung verwendet.",
+                                    L"某些快捷键已被其他应用占用。");
+    }
+}
+
 void showTrayMenu() {
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
     AppendMenuW(menu, MF_STRING | MF_DEFAULT, TRAY_SHOW, localized(L"Ouvrir RGBCcontrol", L"Open RGBCcontrol", L"RGBCcontrol öffnen", L"打开 RGBCcontrol"));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    HMENU profiles = CreatePopupMenu();
     for (int index = 0; index < static_cast<int>(g_profiles.size()); ++index) {
         UINT flags = MF_STRING;
         if (!g_profiles[index].saved) flags |= MF_GRAYED;
         if (g_activeProfile == index) flags |= MF_CHECKED;
         const std::wstring label = std::wstring(localized(L"Profil ", L"Profile ", L"Profil ", L"模式 ")) + profileName(index);
-        AppendMenuW(menu, flags, TRAY_PROFILE_FIRST + index, label.c_str());
+        AppendMenuW(profiles, flags, TRAY_PROFILE_FIRST + index, label.c_str());
     }
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(profiles), localized(L"Profils rapides", L"Quick profiles", L"Schnellprofile", L"快速模式"));
+    HMENU lighting = CreatePopupMenu();
+    AppendMenuW(lighting, MF_STRING, TRAY_LIGHTS_TOGGLE,
+                g_quickLightsOff ? localized(L"Restaurer l'éclairage", L"Restore lighting", L"Beleuchtung wiederherstellen", L"恢复灯光")
+                                 : localized(L"Éteindre toutes les LED", L"Turn all LEDs off", L"Alle LEDs ausschalten", L"关闭所有灯光"));
+    AppendMenuW(lighting, MF_STRING, TRAY_BRIGHTNESS_DOWN, localized(L"Luminosité −10 %", L"Brightness −10%", L"Helligkeit −10 %", L"亮度 −10%"));
+    AppendMenuW(lighting, MF_STRING, TRAY_BRIGHTNESS_UP, localized(L"Luminosité +10 %", L"Brightness +10%", L"Helligkeit +10 %", L"亮度 +10%"));
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(lighting), localized(L"Éclairage", L"Lighting", L"Beleuchtung", L"灯光"));
+    HMENU cooling = CreatePopupMenu();
+    AppendMenuW(cooling, MF_STRING | (g_fanProfile == FanProfile::Quiet ? MF_CHECKED : 0), TRAY_FAN_QUIET,
+                localized(L"Silencieux", L"Quiet", L"Leise", L"静音"));
+    AppendMenuW(cooling, MF_STRING | (g_fanProfile == FanProfile::Balanced ? MF_CHECKED : 0), TRAY_FAN_BALANCED,
+                localized(L"Équilibré", L"Balanced", L"Ausgeglichen", L"均衡"));
+    AppendMenuW(cooling, MF_STRING | (g_fanProfile == FanProfile::Performance ? MF_CHECKED : 0), TRAY_FAN_PERFORMANCE,
+                localized(L"Performance", L"Performance", L"Leistung", L"性能"));
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(cooling), localized(L"Ventilation", L"Cooling", L"Lüfter", L"风扇"));
+    AppendMenuW(menu, MF_STRING | (g_hasUndoProfile ? 0 : MF_GRAYED), TRAY_UNDO,
+                localized(L"Annuler la dernière modification", L"Undo last change", L"Letzte Änderung rückgängig", L"撤销上次更改"));
+    AppendMenuW(menu, MF_STRING, TRAY_THEME,
+                lightTheme() ? localized(L"Thème sombre", L"Dark theme", L"Dunkles Design", L"深色主题")
+                             : localized(L"Thème clair", L"Light theme", L"Helles Design", L"浅色主题"));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, TRAY_EXIT, localized(L"Quitter", L"Exit", L"Beenden", L"退出"));
     POINT cursor{};
@@ -3740,8 +4225,25 @@ void showTrayMenu() {
     const UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, cursor.x, cursor.y, 0, g_window, nullptr);
     DestroyMenu(menu);
     if (command == TRAY_SHOW) showMainWindow();
-    else if (command >= TRAY_PROFILE_FIRST && command < TRAY_PROFILE_FIRST + g_profiles.size()) applyProfileSlot(static_cast<int>(command - TRAY_PROFILE_FIRST));
+    else if (command >= TRAY_PROFILE_FIRST && command < TRAY_PROFILE_FIRST + g_profiles.size()) {
+        rememberUndoSnapshot();
+        applyProfileSlot(static_cast<int>(command - TRAY_PROFILE_FIRST));
+    }
+    else if (command == TRAY_LIGHTS_TOGGLE) toggleQuickLights();
+    else if (command == TRAY_BRIGHTNESS_DOWN || command == TRAY_BRIGHTNESS_UP) {
+        rememberUndoSnapshot();
+        g_brightness = std::clamp(g_brightness + (command == TRAY_BRIGHTNESS_UP ? 10 : -10), 0, 100);
+        if (g_selectedEffect == 0) applyStaticColor(); else startEffect();
+    }
+    else if (command == TRAY_FAN_QUIET || command == TRAY_FAN_BALANCED || command == TRAY_FAN_PERFORMANCE) {
+        rememberUndoSnapshot();
+        applyFanProfile(command == TRAY_FAN_QUIET ? Action::FanProfileQuiet
+                        : command == TRAY_FAN_BALANCED ? Action::FanProfileBalanced : Action::FanProfilePerformance);
+    }
+    else if (command == TRAY_UNDO) restoreUndoSnapshot();
+    else if (command == TRAY_THEME) selectAppTheme(lightTheme() ? AppTheme::Dark : AppTheme::Light);
     else if (command == TRAY_EXIT) DestroyWindow(g_window);
+    if (g_window) InvalidateRect(g_window, nullptr, FALSE);
 }
 
 bool isAdministrator() {
@@ -4323,7 +4825,31 @@ void drawDashboard(Graphics& graphics, int width, int height, float originY) {
                   localized(L"ACCUEIL", L"HOME", L"START", L"主页"),
                   localized(L"Ton setup, simplement.", L"Your setup, made simple.", L"Dein Setup, ganz einfach.", L"轻松掌控整套设备。"));
     drawButton(graphics, RectF(width - 164.0f, originY + 10, 126, 40), localized(L"Actualiser", L"Refresh", L"Aktualisieren", L"刷新"), false, Action::Refresh);
-    float y = originY + 86;
+    const float quickHeight = g_compactDashboard ? 52.0f : 68.0f;
+    RectF quickCard(x, originY + 78, available, quickHeight);
+    fillRound(graphics, quickCard, 16, Color(255, 23, 27, 39));
+    strokeRound(graphics, quickCard, 16, Color(255, 43, 49, 65));
+    const float quickLabelWidth = g_compactDashboard ? 92.0f : 126.0f;
+    text(graphics, localized(L"ACCÈS RAPIDE", L"QUICK ACCESS", L"SCHNELLZUGRIFF", L"快速操作"),
+         RectF(quickCard.X + 16, quickCard.Y, quickLabelWidth - 22, quickCard.Height), 9,
+         accentTint(0.42), FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
+    const float quickX = quickCard.X + quickLabelWidth;
+    const float quickGap = 7.0f;
+    const float quickWidth = (quickCard.GetRight() - quickX - 16.0f - quickGap * 4.0f) / 5.0f;
+    const float quickY = quickCard.Y + (quickCard.Height - 38.0f) / 2.0f;
+    for (int index = 0; index < 3; ++index) {
+        drawButton(graphics, RectF(quickX + index * (quickWidth + quickGap), quickY, quickWidth, 38),
+                   profileName(index), g_activeProfile == index, Action::FavoriteProfile, index, g_profiles[index].saved);
+    }
+    drawButton(graphics, RectF(quickX + 3 * (quickWidth + quickGap), quickY, quickWidth, 38),
+               g_quickLightsOff ? localized(L"Rallumer", L"Restore lights", L"Licht an", L"恢复灯光")
+                                : localized(L"Tout éteindre", L"All lights off", L"Alles aus", L"全部关闭"),
+               g_quickLightsOff, Action::QuickLightsToggle);
+    drawButton(graphics, RectF(quickX + 4 * (quickWidth + quickGap), quickY, quickWidth, 38),
+               localized(L"Annuler", L"Undo", L"Rückgängig", L"撤销"), false,
+               Action::UndoLastChange, -1, g_hasUndoProfile);
+
+    float y = quickCard.GetBottom() + 20.0f;
     int totalDevices = static_cast<int>(g_rgbDevices.size()) + (g_duckyDetected ? 1 : 0);
     text(graphics, std::wstring(localized(L"Appareils détectés  ", L"Devices found  ", L"Erkannte Geräte  ", L"已检测设备  ")) + std::to_wstring(totalDevices), RectF(x, y, 360, 22), 13, Color(255, 220, 224, 234), FontStyleBold);
     text(graphics, g_status, RectF(width - 480.0f, y, 440, 22), 10,
@@ -5823,7 +6349,7 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
                Action::GamepadApplyColor, -1, lightingReady);
 
     y = lighting.GetBottom() + 16;
-    RectF compatibility(x, y, available, 168);
+    RectF compatibility(x, y, available, 224);
     fillRound(graphics, compatibility, 19, Color(248, 27, 32, 45));
     strokeRound(graphics, compatibility, 19,
                 g_xboxBridgeStatus == XboxBridgeStatus::Ready ? Color(255, 42, 105, 82) : Color(255, 43, 49, 65));
@@ -5896,6 +6422,24 @@ void drawGamepads(Graphics& graphics, int width, int height, float originY) {
          FontStyleBold);
     textWrapped(graphics, bridgeDetail, RectF(bridgeStatus.X + 13, bridgeStatus.Y + 27, bridgeStatus.Width - 26, 25),
                 7.2f, Color(255, 139, 149, 170));
+
+    RectF priorityToggle(compatibility.X + 20, compatibility.Y + 154, compatibility.Width - 40, 48);
+    fillRound(graphics, priorityToggle, 13, g_gamepadAutoPriority ? Color(255, 20, 55, 48) : Color(255, 31, 36, 49));
+    strokeRound(graphics, priorityToggle, 13, g_gamepadAutoPriority ? Color(255, 42, 111, 85) : Color(255, 54, 62, 81));
+    text(graphics, localized(L"Priorité manette automatique", L"Automatic controller priority",
+                             L"Automatische Controller-Priorität", L"自动手柄优先级"),
+         RectF(priorityToggle.X + 15, priorityToggle.Y + 6, priorityToggle.Width - 90, 17), 9,
+         primaryTextColor(), FontStyleBold);
+    text(graphics, localized(L"Active XInput dès que la DualSense est branchée.",
+                             L"Starts XInput as soon as the DualSense is connected.",
+                             L"Startet XInput, sobald die DualSense verbunden ist.",
+                             L"DualSense 连接后立即启动 XInput。"),
+         RectF(priorityToggle.X + 15, priorityToggle.Y + 25, priorityToggle.Width - 90, 15), 7.5f, secondaryTextColor());
+    RectF priorityTrack(priorityToggle.GetRight() - 62, priorityToggle.Y + 13, 46, 22);
+    fillRound(graphics, priorityTrack, 11, g_gamepadAutoPriority ? accentColor() : Color(255, 61, 69, 88));
+    SolidBrush priorityKnob(Color::White);
+    graphics.FillEllipse(&priorityKnob, RectF(priorityTrack.X + (g_gamepadAutoPriority ? 25 : 3), priorityTrack.Y + 3, 16, 16));
+    addHit(priorityToggle, Action::GamepadToggleAutoPriority);
 
     g_maxScroll = std::max(0.0f, compatibility.GetBottom() + g_scrollOffset + 18 - height);
 }
@@ -6957,12 +7501,42 @@ void drawProfiles(Graphics& graphics, int width, int height, float originY) {
                false, Action::ProfileExport);
     drawButton(graphics, RectF(transfer.GetRight() - 204, transfer.Y + 38, 184, 44), localized(L"Importer", L"Import", L"Importieren", L"导入"),
                true, Action::ProfileImport);
-    const std::wstring status = g_profileStatus.empty()
+    y = transfer.GetBottom() + 16;
+    RectF applicationCard(x, y, available, 214);
+    fillRound(graphics, applicationCard, 17, Color(255, 28, 32, 45));
+    strokeRound(graphics, applicationCard, 17, g_applicationProfilesEnabled ? accentColor(150) : Color(255, 43, 49, 65));
+    text(graphics, localized(L"Profils automatiques par application", L"Automatic profiles by application",
+                             L"Automatische Profile nach Anwendung", L"按应用自动切换模式"),
+         RectF(applicationCard.X + 20, applicationCard.Y + 16, 420, 23), 14, Color::White, FontStyleBold);
+    drawButton(graphics, RectF(applicationCard.GetRight() - 176, applicationCard.Y + 12, 156, 38),
+               g_applicationProfilesEnabled ? localized(L"Automatique activé", L"Automatic enabled", L"Automatik aktiv", L"自动切换已启用")
+                                            : localized(L"Automatique coupé", L"Automatic disabled", L"Automatik aus", L"自动切换已关闭"),
+               g_applicationProfilesEnabled, Action::ToggleApplicationProfiles);
+    for (int index = 0; index < 3; ++index) {
+        const float rowY = applicationCard.Y + 58 + index * 48.0f;
+        RectF row(applicationCard.X + 18, rowY, applicationCard.Width - 36, 40);
+        fillRound(graphics, row, 11, Color(255, 22, 26, 37));
+        text(graphics, profileName(index), RectF(row.X + 13, row.Y, 110, row.Height), 10, Color::White,
+             FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
+        const std::wstring binding = g_profileApplications[index].empty()
+            ? localized(L"Aucune application associée", L"No application assigned", L"Keine Anwendung zugewiesen", L"未关联应用")
+            : normalizedExecutableName(g_profileApplications[index]);
+        text(graphics, binding, RectF(row.X + 120, row.Y, row.Width - 330, row.Height), 9,
+             g_profileApplications[index].empty() ? secondaryTextColor() : Color(255, 105, 221, 178),
+             FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
+        drawButton(graphics, RectF(row.GetRight() - 196, row.Y + 3, 126, 34),
+                   localized(L"Choisir l'app", L"Choose app", L"App wählen", L"选择应用"), false,
+                   Action::BindApplicationProfile, index, g_profiles[index].saved);
+        drawButton(graphics, RectF(row.GetRight() - 62, row.Y + 3, 50, 34), L"×", false,
+                   Action::ClearApplicationProfile, index, !g_profileApplications[index].empty());
+    }
+
+    const std::wstring status = !g_comfortStatus.empty() ? g_comfortStatus : g_profileStatus.empty()
         ? localized(L"Tes profils sont conservés après la fermeture de l'application.", L"Your profiles remain saved after the app closes.",
                     L"Deine Profile bleiben nach dem Beenden gespeichert.", L"关闭应用后模式仍会保留。")
         : g_profileStatus;
-    text(graphics, status, RectF(x, transfer.GetBottom() + 15, available, 20), 10, Color(255, 110, 217, 177), FontStyleBold);
-    g_maxScroll = std::max(0.0f, transfer.GetBottom() + g_scrollOffset + 52 - height);
+    text(graphics, status, RectF(x, applicationCard.GetBottom() + 15, available, 20), 10, Color(255, 110, 217, 177), FontStyleBold);
+    g_maxScroll = std::max(0.0f, applicationCard.GetBottom() + g_scrollOffset + 52 - height);
 }
 
 std::wstring diagnosticReport() {
@@ -6980,6 +7554,19 @@ std::wstring diagnosticReport() {
     report << L"Windows hot-plug: " << (g_hotplugMonitoring ? L"Active" : L"Unavailable") << L"\r\n";
     report << L"Fallback scan interval: " << g_detectionIntervalSeconds << L" seconds\r\n";
     report << L"Administrator: " << (g_isAdministrator ? L"Yes" : L"No") << L"\r\n";
+    report << L"Application profiles: " << (g_applicationProfilesEnabled ? L"Enabled" : L"Disabled") << L"\r\n";
+    for (std::size_t index = 0; index < g_profileApplications.size(); ++index) {
+        if (!g_profileApplications[index].empty()) {
+            report << L"  - profile " << (index + 1) << L" -> " << normalizedExecutableName(g_profileApplications[index]) << L"\r\n";
+        }
+    }
+    report << L"Global hotkeys: " << (g_globalHotkeysEnabled ? L"Enabled" : L"Disabled") << L"\r\n";
+    report << L"Smart mode: " << (g_smartModeEnabled ? L"Enabled" : L"Disabled") << L"\r\n";
+    report << L"Sleep lighting: " << (g_sleepLightsEnabled ? L"Off while away" : L"Unchanged")
+           << L" | restore=" << (g_restoreOnWake ? L"yes" : L"no") << L"\r\n";
+    report << L"Controller automatic priority: " << (g_gamepadAutoPriority ? L"Enabled" : L"Disabled")
+           << L" | XInput=" << (g_xboxBridgeStatus == XboxBridgeStatus::Ready ? L"ready" : L"inactive") << L"\r\n";
+    report << L"Hardware history samples: " << g_telemetry.size() << L"\r\n";
     const std::wstring rgbConflict = rgbConflictProcess();
     report << L"Competing RGB engine: " << (rgbConflict.empty() ? L"No" : rgbConflict) << L"\r\n";
     report << L"Empty ARGB zone policy: initialize to 120 LEDs within controller limits\r\n";
@@ -7126,12 +7713,106 @@ void drawDiagnostics(Graphics& graphics, int width, int height, float originY) {
     for (const FanDevice& fan : g_fans) {
         const std::wstring rpm = fan.rpm >= 0 ? std::to_wstring(static_cast<int>(std::lround(fan.rpm))) + L" RPM" : L"RPM --";
         diagnosticRow(fan.name, fan.hardware + L" · " + rpm,
-                      fan.controllable ? localized(L"CONTRÔLABLE", L"CONTROLLABLE", L"STEUERBAR", L"可控")
-                                       : localized(L"LECTURE SEULE", L"READ ONLY", L"NUR LESEN", L"只读"), fan.controllable);
+                       fan.controllable ? localized(L"CONTRÔLABLE", L"CONTROLLABLE", L"STEUERBAR", L"可控")
+                                        : localized(L"LECTURE SEULE", L"READ ONLY", L"NUR LESEN", L"只读"), fan.controllable);
     }
+    y += 8;
+    RectF guidance(x, y, available, 104);
+    fillRound(graphics, guidance, 16, Color(255, 28, 32, 45));
+    const std::wstring conflict = rgbConflictProcess();
+    const int untested = static_cast<int>(std::count_if(g_rgbDevices.begin(), g_rgbDevices.end(), [](const RgbDevice& device) {
+        return localCertification(device) != LocalCertification::Passed;
+    }));
+    const bool healthy = (g_openRgbReady || hasActivePluginDevice()) && !g_rgbDevices.empty() && conflict.empty();
+    strokeRound(graphics, guidance, 16, healthy ? Color(255, 52, 126, 101) : Color(255, 145, 104, 48), 1.4f);
+    text(graphics, healthy ? localized(L"Tout est prêt", L"Everything is ready", L"Alles ist bereit", L"一切就绪")
+                           : localized(L"Action recommandée", L"Recommended action", L"Empfohlene Aktion", L"建议操作"),
+         RectF(guidance.X + 20, guidance.Y + 16, 250, 23), 14,
+         healthy ? Color(255, 105, 221, 178) : Color(255, 241, 183, 104), FontStyleBold);
+    std::wstring guidanceText;
+    if (!conflict.empty()) {
+        guidanceText = localized(L"Ferme le moteur RGB concurrent avant d'appliquer une couleur : ",
+                                 L"Close the competing RGB engine before applying a color: ",
+                                 L"Schließe vor dem Anwenden einer Farbe die konkurrierende RGB-Software: ",
+                                 L"应用颜色前请关闭冲突的 RGB 引擎：") + conflict;
+    } else if (!(g_openRgbReady || hasActivePluginDevice())) {
+        guidanceText = localized(L"Clique sur Actualiser. RGBCcontrol tentera de relancer OpenRGB et les fournisseurs locaux.",
+                                 L"Click Refresh. RGBCcontrol will retry OpenRGB and local providers.",
+                                 L"Klicke auf Aktualisieren. RGBCcontrol versucht OpenRGB und lokale Anbieter erneut.",
+                                 L"点击刷新，RGBCcontrol 将重试 OpenRGB 和本地提供程序。");
+    } else if (g_rgbDevices.empty()) {
+        guidanceText = localized(L"Reconnecte l'appareil puis attends la détection automatique. Aucun faux périphérique ne sera ajouté.",
+                                 L"Reconnect the device and wait for automatic detection. No placeholder device will be added.",
+                                 L"Gerät neu verbinden und automatische Erkennung abwarten. Keine Platzhalter werden hinzugefügt.",
+                                 L"重新连接设备并等待自动检测，不会添加虚假设备。");
+    } else if (untested > 0) {
+        guidanceText = std::to_wstring(untested) + localized(L" appareil(s) restent à valider visuellement. Ouvre Appareils pour lancer le test guidé.",
+                                                                  L" device(s) still need visual validation. Open Devices to run the guided test.",
+                                                                  L" Gerät(e) müssen noch visuell geprüft werden. Öffne Geräte für den geführten Test.",
+                                                                  L" 个设备仍需视觉验证。请打开设备页面运行引导测试。");
+        addHit(guidance, Action::NavDevices);
+    } else {
+        guidanceText = localized(L"Contrôleurs RGB, capteurs et détection automatique fonctionnent normalement.",
+                                 L"RGB controllers, sensors, and automatic detection are working normally.",
+                                 L"RGB-Controller, Sensoren und automatische Erkennung funktionieren normal.",
+                                 L"RGB 控制器、传感器和自动检测均正常工作。");
+    }
+    textWrapped(graphics, guidanceText, RectF(guidance.X + 20, guidance.Y + 46, guidance.Width - 40, 45),
+                10, secondaryTextColor());
+    y = guidance.GetBottom() + 18;
+
+    RectF chart(x, y, available, 210);
+    fillRound(graphics, chart, 16, Color(255, 28, 32, 45));
+    strokeRound(graphics, chart, 16, Color(255, 43, 49, 65));
+    text(graphics, localized(L"Historique matériel", L"Hardware history", L"Hardware-Verlauf", L"硬件历史"),
+         RectF(chart.X + 20, chart.Y + 15, 260, 23), 14, Color::White, FontStyleBold);
+    const auto maximumSample = [&](bool cpu) {
+        double maximum = -1.0;
+        for (const TelemetrySample& sample : g_telemetry) maximum = std::max(maximum, cpu ? sample.cpu : sample.gpu);
+        return maximum;
+    };
+    const double maxCpu = maximumSample(true), maxGpu = maximumSample(false);
+    std::wstring legend = localized(L"CPU max ", L"CPU max ", L"CPU max. ", L"CPU 最高 ") +
+        (maxCpu >= 0 ? std::to_wstring(static_cast<int>(std::lround(maxCpu))) + L" °C" : L"--") + L"   ·   " +
+        localized(L"GPU max ", L"GPU max ", L"GPU max. ", L"GPU 最高 ") +
+        (maxGpu >= 0 ? std::to_wstring(static_cast<int>(std::lround(maxGpu))) + L" °C" : L"--") + L"   ·   " +
+        std::to_wstring(g_telemetry.size()) + localized(L" mesure(s)", L" sample(s)", L" Messung(en)", L" 次测量");
+    text(graphics, legend, RectF(chart.X + 290, chart.Y + 15, chart.Width - 310, 22), 9, secondaryTextColor(),
+         FontStyleRegular, StringAlignmentFar);
+    RectF graph(chart.X + 28, chart.Y + 52, chart.Width - 56, 132);
+    fillRound(graphics, graph, 10, Color(255, 17, 20, 29));
+    for (int grid = 1; grid < 4; ++grid) {
+        Pen gridPen(lightTheme() ? Color(255, 223, 228, 238) : Color(255, 43, 49, 64), 1.0f);
+        const float gridY = graph.Y + graph.Height * grid / 4.0f;
+        graphics.DrawLine(&gridPen, graph.X + 8, gridY, graph.GetRight() - 8, gridY);
+    }
+    auto drawTelemetryLine = [&](bool cpu, Color color) {
+        if (g_telemetry.size() < 2) return;
+        std::vector<PointF> points;
+        points.reserve(g_telemetry.size());
+        for (std::size_t index = 0; index < g_telemetry.size(); ++index) {
+            const double value = cpu ? g_telemetry[index].cpu : g_telemetry[index].gpu;
+            if (value < 0) continue;
+            const float px = graph.X + 8 + (graph.Width - 16) * static_cast<float>(index) /
+                static_cast<float>(std::max<std::size_t>(1, g_telemetry.size() - 1));
+            const float ratio = std::clamp(static_cast<float>((value - 20.0) / 80.0), 0.0f, 1.0f);
+            points.emplace_back(px, graph.GetBottom() - 8 - ratio * (graph.Height - 16));
+        }
+        if (points.size() >= 2) {
+            Pen linePen(color, 2.2f);
+            linePen.SetLineJoin(LineJoinRound);
+            graphics.DrawLines(&linePen, points.data(), static_cast<INT>(points.size()));
+        }
+    };
+    drawTelemetryLine(true, Color(255, 255, 105, 130));
+    drawTelemetryLine(false, Color(255, 71, 166, 255));
+    text(graphics, L"CPU", RectF(graph.X + 10, graph.Y + 8, 44, 17), 8, Color(255, 255, 105, 130), FontStyleBold);
+    text(graphics, L"GPU", RectF(graph.X + 54, graph.Y + 8, 44, 17), 8, Color(255, 71, 166, 255), FontStyleBold);
     if (!g_diagnosticStatus.empty()) {
-        text(graphics, g_diagnosticStatus, RectF(x, y + 3, available, 20), 10, Color(255, 105, 221, 178), FontStyleBold);
-        y += 28;
+        text(graphics, g_diagnosticStatus, RectF(x, chart.GetBottom() + 12, available, 20), 10, Color(255, 105, 221, 178), FontStyleBold);
+        y = chart.GetBottom() + 40;
+    } else {
+        y = chart.GetBottom() + 16;
     }
     g_maxScroll = std::max(0.0f, y + g_scrollOffset + 20 - height);
 }
@@ -7446,7 +8127,100 @@ void drawSettings(Graphics& graphics, int width, int height, float originY) {
         : g_scheduleStatus;
     text(graphics, scheduleMessage, RectF(x, scheduleCard.GetBottom() + 12, available, 20), 9,
          g_scheduleEnabled ? Color(255, 105, 221, 178) : Color(255, 126, 136, 158), FontStyleBold);
-    g_maxScroll = std::max(0.0f, scheduleCard.GetBottom() + g_scrollOffset + 48 - height);
+
+    y = scheduleCard.GetBottom() + 42;
+    RectF dailyCard(x, y, available, 206);
+    fillRound(graphics, dailyCard, 18, Color(255, 28, 32, 45));
+    strokeRound(graphics, dailyCard, 18, Color(255, 39, 45, 61));
+    text(graphics, localized(L"Confort quotidien", L"Daily comfort", L"Täglicher Komfort", L"日常舒适功能"),
+         RectF(dailyCard.X + 20, dailyCard.Y + 17, 300, 23), 15, Color::White, FontStyleBold);
+    text(graphics, localized(L"Automatise les actions répétitives tout en gardant le contrôle manuel.",
+                             L"Automate repetitive actions while keeping manual control.",
+                             L"Automatisiere wiederkehrende Aktionen und behalte die manuelle Kontrolle.",
+                             L"自动处理重复操作，同时保留手动控制。"),
+         RectF(dailyCard.X + 20, dailyCard.Y + 42, dailyCard.Width - 40, 18), 9, secondaryTextColor());
+    const float dailyWidth = (dailyCard.Width - 52) / 2.0f;
+    integrationOption(RectF(dailyCard.X + 20, dailyCard.Y + 72, dailyWidth, 54),
+                      localized(L"Profils par application", L"Profiles by application", L"Profile nach Anwendung", L"按应用切换模式"),
+                      localized(L"Change selon le jeu actif", L"Changes with the active game", L"Wechselt mit dem aktiven Spiel", L"随当前游戏切换"),
+                      g_applicationProfilesEnabled, Action::ToggleApplicationProfiles);
+    integrationOption(RectF(dailyCard.X + 32 + dailyWidth, dailyCard.Y + 72, dailyWidth, 54),
+                      localized(L"Raccourcis globaux", L"Global shortcuts", L"Globale Tastenkürzel", L"全局快捷键"),
+                      L"Ctrl+Alt+1/2/3 · L · U", g_globalHotkeysEnabled, Action::ToggleGlobalHotkeys);
+    integrationOption(RectF(dailyCard.X + 20, dailyCard.Y + 136, dailyWidth, 54),
+                      localized(L"Mode intelligent", L"Smart mode", L"Smart-Modus", L"智能模式"),
+                      localized(L"Températures, effets et ventilation", L"Temperatures, effects, and cooling", L"Temperaturen, Effekte und Lüfter", L"温度、灯效和散热"),
+                      g_smartModeEnabled, Action::ToggleSmartMode);
+    integrationOption(RectF(dailyCard.X + 32 + dailyWidth, dailyCard.Y + 136, dailyWidth, 54),
+                      localized(L"Priorité manette", L"Controller priority", L"Controller-Priorität", L"手柄优先"),
+                      localized(L"Active XInput à la connexion", L"Enables XInput on connection", L"Aktiviert XInput beim Verbinden", L"连接时启用 XInput"),
+                      g_gamepadAutoPriority, Action::GamepadToggleAutoPriority);
+
+    y = dailyCard.GetBottom() + 18;
+    RectF presenceCard(x, y, available, 136);
+    fillRound(graphics, presenceCard, 18, Color(255, 28, 32, 45));
+    strokeRound(graphics, presenceCard, 18, Color(255, 39, 45, 61));
+    text(graphics, localized(L"Veille et verrouillage", L"Sleep and lock", L"Standby und Sperre", L"睡眠与锁定"),
+         RectF(presenceCard.X + 20, presenceCard.Y + 17, 300, 23), 15, Color::White, FontStyleBold);
+    integrationOption(RectF(presenceCard.X + 20, presenceCard.Y + 62, dailyWidth, 58),
+                      localized(L"Couper les LED", L"Turn LEDs off", L"LEDs ausschalten", L"关闭灯光"),
+                      localized(L"À la veille ou au verrouillage", L"When sleeping or locked", L"Bei Standby oder Sperre", L"睡眠或锁定时"),
+                      g_sleepLightsEnabled, Action::ToggleSleepLights);
+    integrationOption(RectF(presenceCard.X + 32 + dailyWidth, presenceCard.Y + 62, dailyWidth, 58),
+                      localized(L"Restaurer au retour", L"Restore on return", L"Beim Zurückkehren wiederherstellen", L"返回时恢复"),
+                      localized(L"Retrouve exactement l'état précédent", L"Restores the exact previous state", L"Stellt den vorherigen Zustand wieder her", L"精确恢复之前状态"),
+                      g_restoreOnWake, Action::ToggleRestoreOnWake);
+
+    y = presenceCard.GetBottom() + 18;
+    RectF accessibilityCard(x, y, available, 190);
+    fillRound(graphics, accessibilityCard, 18, Color(255, 28, 32, 45));
+    strokeRound(graphics, accessibilityCard, 18, Color(255, 39, 45, 61));
+    text(graphics, localized(L"Lisibilité et disposition", L"Readability and layout", L"Lesbarkeit und Layout", L"可读性与布局"),
+         RectF(accessibilityCard.X + 20, accessibilityCard.Y + 17, 330, 23), 15, Color::White, FontStyleBold);
+    text(graphics, localized(L"Taille du texte", L"Text size", L"Textgröße", L"文字大小"),
+         RectF(accessibilityCard.X + 20, accessibilityCard.Y + 61, 150, 20), 10, Color::White, FontStyleBold);
+    const wchar_t* scaleNames[] = {
+        localized(L"Compact", L"Compact", L"Kompakt", L"紧凑"),
+        localized(L"Normal", L"Normal", L"Normal", L"标准"),
+        localized(L"Grand", L"Large", L"Groß", L"大")
+    };
+    const float scaleWidth = (accessibilityCard.Width - 218) / 3.0f;
+    for (int index = 0; index < 3; ++index) {
+        drawButton(graphics, RectF(accessibilityCard.X + 178 + index * (scaleWidth + 8), accessibilityCard.Y + 52,
+                                   scaleWidth - (index == 2 ? 16 : 0), 38),
+                   scaleNames[index], g_textScale == index, Action::SelectTextScale, index);
+    }
+    integrationOption(RectF(accessibilityCard.X + 20, accessibilityCard.Y + 112, dailyWidth, 58),
+                      localized(L"Contraste renforcé", L"High contrast", L"Hoher Kontrast", L"高对比度"),
+                      localized(L"Textes et séparateurs plus visibles", L"Stronger text and separators", L"Deutlichere Texte und Trennlinien", L"增强文字和分隔线"),
+                      g_highContrast, Action::ToggleHighContrast);
+    integrationOption(RectF(accessibilityCard.X + 32 + dailyWidth, accessibilityCard.Y + 112, dailyWidth, 58),
+                      localized(L"Accueil compact", L"Compact dashboard", L"Kompakte Übersicht", L"紧凑首页"),
+                      localized(L"Raccourcit les commandes favorites", L"Tightens favorite controls", L"Verdichtet die Favoriten", L"压缩常用操作"),
+                      g_compactDashboard, Action::ToggleCompactDashboard);
+
+    y = accessibilityCard.GetBottom() + 18;
+    RectF dataCard(x, y, available, 148);
+    fillRound(graphics, dataCard, 18, Color(255, 28, 32, 45));
+    strokeRound(graphics, dataCard, 18, Color(255, 39, 45, 61));
+    text(graphics, localized(L"Sauvegarde et historique", L"Backup and history", L"Sicherung und Verlauf", L"备份与历史"),
+         RectF(dataCard.X + 20, dataCard.Y + 17, 300, 23), 15, Color::White, FontStyleBold);
+    textWrapped(graphics, localized(L"Sauvegarde tous les profils, réglages et certifications dans un seul fichier. L'historique conserve les 180 dernières mesures.",
+                                    L"Back up every profile, setting, and certification in one file. History keeps the latest 180 samples.",
+                                    L"Sichere alle Profile, Einstellungen und Zertifizierungen in einer Datei. Der Verlauf behält 180 Messungen.",
+                                    L"将所有模式、设置和认证备份到一个文件中；历史记录保留最近 180 次测量。"),
+                RectF(dataCard.X + 20, dataCard.Y + 49, dataCard.Width - 480, 72), 9, secondaryTextColor());
+    drawButton(graphics, RectF(dataCard.GetRight() - 444, dataCard.Y + 61, 132, 40),
+               localized(L"Sauvegarder", L"Back up", L"Sichern", L"备份"), false, Action::BackupAll);
+    drawButton(graphics, RectF(dataCard.GetRight() - 300, dataCard.Y + 61, 132, 40),
+               localized(L"Restaurer", L"Restore", L"Wiederherstellen", L"恢复"), true, Action::RestoreAll);
+    drawButton(graphics, RectF(dataCard.GetRight() - 156, dataCard.Y + 61, 136, 40),
+               localized(L"Effacer l'historique", L"Clear history", L"Verlauf löschen", L"清除历史"), false, Action::ClearTelemetry);
+    if (!g_comfortStatus.empty()) {
+        text(graphics, g_comfortStatus, RectF(x, dataCard.GetBottom() + 12, available, 20), 9,
+             Color(255, 105, 221, 178), FontStyleBold);
+    }
+    g_maxScroll = std::max(0.0f, dataCard.GetBottom() + g_scrollOffset + 52 - height);
 }
 
 void drawColorPicker(Graphics& graphics, int width, int height) {
@@ -8023,6 +8797,22 @@ void seedCaptureData() {
     g_profiles[1].fanCurveEnabled = true;
     g_profiles[1].curveSpeeds = {30, 35, 55, 80};
     g_activeProfile = 0;
+    g_profileApplications = {L"C:\\Games\\Aurora\\Aurora.exe", L"C:\\Games\\NightRun\\NightRun.exe", L""};
+    g_applicationProfilesEnabled = true;
+    g_globalHotkeysEnabled = true;
+    g_sleepLightsEnabled = true;
+    g_restoreOnWake = true;
+    g_smartModeEnabled = true;
+    g_gamepadAutoPriority = true;
+    g_telemetry.clear();
+    const ULONGLONG now = GetTickCount64();
+    for (int index = 0; index < 48; ++index) {
+        const double phase = static_cast<double>(index) * 0.23;
+        g_telemetry.push_back({now - static_cast<ULONGLONG>((47 - index) * 5000),
+                               49.0 + std::sin(phase) * 6.0,
+                               44.0 + std::sin(phase * 0.72 + 0.8) * 8.0,
+                               820.0 + std::sin(phase * 0.55) * 170.0});
+    }
 }
 
 int runRenderBenchmark(const fs::path& destination) {
@@ -8141,7 +8931,16 @@ int runSelfTests(const fs::path& destination) {
     g_scheduleDayHour = 8;
     g_scheduleNightHour = 22;
     const bool schedule = scheduleUsesDayProfile(8) && scheduleUsesDayProfile(21) &&
-                          !scheduleUsesDayProfile(22) && !scheduleUsesDayProfile(2);
+                           !scheduleUsesDayProfile(22) && !scheduleUsesDayProfile(2);
+    const bool applicationNormalization = normalizedExecutableName(L"C:\\Games\\Aurora\\AURORA.EXE") == L"aurora.exe";
+    const std::deque<TelemetrySample> savedTelemetry = g_telemetry;
+    const ULONGLONG savedTelemetryPersist = g_lastTelemetryPersist;
+    g_telemetry.clear();
+    g_lastTelemetryPersist = GetTickCount64();
+    for (int sample = 0; sample < 220; ++sample) recordTelemetrySample();
+    const bool telemetryRetention = g_telemetry.size() == 180;
+    g_telemetry = savedTelemetry;
+    g_lastTelemetryPersist = savedTelemetryPersist;
     g_duckyMode = 0;
     g_duckyGuideStage = 1;
     const bool duckyStaticGuide = duckyGuideStageCount() == 2 && duckyGuideKind() == 1;
@@ -8426,7 +9225,8 @@ int runSelfTests(const fs::path& destination) {
     g_activeEffectIndex = savedActiveEffect;
     g_effectStartedAt = savedEffectStartedAt;
     fs::remove(testFile, error);
-    return roundTrip && interpolation && schedule && duckyStaticGuide && duckyAnimatedGuide && duckyOffGuide &&
+    return roundTrip && interpolation && schedule && applicationNormalization && telemetryRetention &&
+           duckyStaticGuide && duckyAnimatedGuide && duckyOffGuide &&
            realMusicEffect && realAmbilightEffect && extendedAccentPalette && numericOpenRgbTargets && perDeviceModes &&
            gradientSpeedMapping && gradientStaysSaturated && gradientHasNoSeam && controllerTransportProfiles &&
            colorOrderPermutations && dualSenseUsbInput && dualSenseBluetoothInput && dualSenseBluetoothEnhancedInput &&
@@ -8482,6 +9282,7 @@ int createInterfaceCaptures(const fs::path& destination) {
     g_dualSenseLive.buttons[13] = true;
     updateDualSenseVisualAxes(GetTickCount64(), true);
     ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads.png") && ok;
+    ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads-priority.png", 540.0f) && ok;
     g_dualSenseLightingApplied = false;
     ok = savePageCapture(Page::Gamepads, 1180, 760, destination / L"gamepads-lights-off.png") && ok;
     g_dualSenseLightingApplied = true;
@@ -8607,17 +9408,21 @@ int createInterfaceCaptures(const fs::path& destination) {
     ok = savePageCapture(Page::Compatibility, 1180, 760, destination / L"compatibility-without-ducky.png") && ok;
     g_duckyDetected = true;
     ok = savePageCapture(Page::Profiles, 1180, 760, destination / L"profiles.png") && ok;
+    ok = savePageCapture(Page::Profiles, 1180, 760, destination / L"profiles-applications.png", 360.0f) && ok;
     ok = savePageCapture(Page::Fans, 1180, 760, destination / L"fans.png") && ok;
     ok = savePageCapture(Page::Fans, 1180, 760, destination / L"fans-scrolled.png", 260.0f) && ok;
     g_fanProfile = FanProfile::Quiet;
     ok = savePageCapture(Page::Fans, 1180, 760, destination / L"fans-quiet.png") && ok;
     g_fanProfile = FanProfile::Auto;
     ok = savePageCapture(Page::Diagnostics, 1180, 760, destination / L"diagnostics.png") && ok;
+    ok = savePageCapture(Page::Diagnostics, 1180, 760, destination / L"diagnostics-history.png", 620.0f) && ok;
     ok = savePageCapture(Page::Settings, 1180, 760, destination / L"settings.png") && ok;
     g_startupEnabled = true;
     g_minimizeToTray = true;
     g_scheduleEnabled = true;
     ok = savePageCapture(Page::Settings, 1180, 760, destination / L"settings-automation.png", 600) && ok;
+    ok = savePageCapture(Page::Settings, 1180, 760, destination / L"settings-daily-comfort.png", 1380) && ok;
+    ok = savePageCapture(Page::Settings, 1180, 760, destination / L"settings-accessibility-backup.png", 1740) && ok;
     g_startupEnabled = false;
     g_scheduleEnabled = false;
     g_accentPreset = 5;
@@ -8852,6 +9657,24 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             applyDualSenseColor();
             break;
         case Action::GamepadApplyColor: applyDualSenseColor(); break;
+        case Action::GamepadToggleAutoPriority:
+            g_gamepadAutoPriority = !g_gamepadAutoPriority;
+            if (g_gamepadAutoPriority && dualSenseDeviceCount() > 0 &&
+                g_xboxBridgeStatus != XboxBridgeStatus::Ready && g_xboxBridgeStatus != XboxBridgeStatus::Starting) {
+                g_xboxModeEnabled = true;
+                if (startXboxBridge() && g_dualSenseLive.seen) sendXboxState(g_dualSenseLive);
+            }
+            g_comfortStatus = g_gamepadAutoPriority
+                ? localized(L"La DualSense passera automatiquement en XInput prioritaire.",
+                            L"The DualSense will automatically switch to priority XInput.",
+                            L"Die DualSense wechselt automatisch zu priorisiertem XInput.",
+                            L"DualSense 将自动切换到优先 XInput。")
+                : localized(L"La priorité automatique de la manette est désactivée.",
+                            L"Automatic controller priority is disabled.",
+                            L"Die automatische Controller-Priorität ist deaktiviert.",
+                            L"自动手柄优先级已禁用。");
+            saveAutomationSettings();
+            break;
         case Action::GamepadUseNative:
             if (g_xboxModeEnabled || g_xboxBridgeProcess) stopXboxBridge();
             saveAutomationSettings();
@@ -8975,7 +9798,7 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             break;
         case Action::PickColor: chooseColor(); break;
         case Action::SetColor: g_baseColor = hit.value; g_activeProfile = -1; break;
-        case Action::ApplyColor: applyStaticColor(); break;
+        case Action::ApplyColor: rememberUndoSnapshot(); applyStaticColor(); break;
         case Action::Brightness:
         case Action::EffectSpeed:
         case Action::EffectIntensity:
@@ -8983,7 +9806,7 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
         case Action::FanSlider:
             g_dragAction = hit.action; g_dragIndex = hit.index; setSliderValue(hit.action, hit.index, mouseX); break;
         case Action::SelectEffect: if (hit.index >= 0 && hit.index < static_cast<int>(std::size(kEffects))) { g_selectedEffect = hit.index; g_activeProfile = -1; } break;
-        case Action::ApplyEffect: startEffect(); break;
+        case Action::ApplyEffect: rememberUndoSnapshot(); startEffect(); break;
         case Action::AmbientMonitor:
             g_screenMonitors = AmbientScreenCapture::enumerateMonitors();
             if (!g_screenMonitors.empty()) {
@@ -8996,12 +9819,12 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             g_ambientZones = !g_ambientZones.load();
             g_activeProfile = -1;
             break;
-        case Action::FanApply: g_activeProfile = -1; g_fanCurveEnabled = false; g_fanProfile = FanProfile::Custom; changeFan(hit.index, false); break;
-        case Action::FanAuto: g_activeProfile = -1; g_fanCurveEnabled = false; g_fanProfile = FanProfile::Custom; changeFan(hit.index, true); break;
+        case Action::FanApply: rememberUndoSnapshot(); g_activeProfile = -1; g_fanCurveEnabled = false; g_fanProfile = FanProfile::Custom; changeFan(hit.index, false); break;
+        case Action::FanAuto: rememberUndoSnapshot(); g_activeProfile = -1; g_fanCurveEnabled = false; g_fanProfile = FanProfile::Custom; changeFan(hit.index, true); break;
         case Action::FanProfileAuto:
         case Action::FanProfileQuiet:
         case Action::FanProfileBalanced:
-        case Action::FanProfilePerformance: g_activeProfile = -1; applyFanProfile(hit.action); break;
+        case Action::FanProfilePerformance: rememberUndoSnapshot(); g_activeProfile = -1; applyFanProfile(hit.action); break;
         case Action::FanCurveToggle:
             g_activeProfile = -1;
             setFanCurveEnabled(!g_fanCurveEnabled);
@@ -9023,7 +9846,7 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             setFanCurvePoint(hit.index, mouseY);
             break;
         case Action::ProfileSave: saveProfileSlot(hit.index); break;
-        case Action::ProfileLoad: applyProfileSlot(hit.index); break;
+        case Action::ProfileLoad: rememberUndoSnapshot(); applyProfileSlot(hit.index); break;
         case Action::ProfileDelete:
             if (MessageBoxW(g_window, localized(L"Supprimer ce profil enregistré ?", L"Delete this saved profile?",
                                                 L"Dieses gespeicherte Profil löschen?", L"删除此已保存模式？"),
@@ -9031,6 +9854,100 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             break;
         case Action::ProfileExport: exportCurrentProfile(); break;
         case Action::ProfileImport: importProfile(); break;
+        case Action::FavoriteProfile:
+            if (hit.index >= 0 && hit.index < static_cast<int>(g_profiles.size()) && g_profiles[hit.index].saved) {
+                rememberUndoSnapshot();
+                applyProfileSlot(hit.index);
+            }
+            break;
+        case Action::QuickLightsToggle: toggleQuickLights(); break;
+        case Action::UndoLastChange: restoreUndoSnapshot(); break;
+        case Action::ToggleApplicationProfiles:
+            g_applicationProfilesEnabled = !g_applicationProfilesEnabled;
+            if (!g_applicationProfilesEnabled && g_activeApplicationProfile >= 0) {
+                if (g_applicationRestoreReady) applyProfileSnapshot(g_applicationRestoreProfile);
+                g_activeApplicationProfile = -1;
+                g_activeApplicationExecutable.clear();
+                g_applicationRestoreReady = false;
+            } else if (g_applicationProfilesEnabled) {
+                g_activeApplicationExecutable.clear();
+                evaluateApplicationProfiles(true);
+            }
+            saveAutomationSettings();
+            break;
+        case Action::BindApplicationProfile:
+            if (hit.index >= 0 && hit.index < static_cast<int>(g_profileApplications.size())) {
+                fs::path executable;
+                if (selectExecutableFile(executable)) {
+                    g_profileApplications[hit.index] = executable.wstring();
+                    g_activeApplicationExecutable.clear();
+                    g_comfortStatus = localized(L"Application associée au profil.", L"Application linked to the profile.",
+                                                L"Anwendung mit dem Profil verknüpft.", L"应用已关联到模式。");
+                    saveAutomationSettings();
+                }
+            }
+            break;
+        case Action::ClearApplicationProfile:
+            if (hit.index >= 0 && hit.index < static_cast<int>(g_profileApplications.size())) {
+                g_profileApplications[hit.index].clear();
+                if (g_activeApplicationProfile == hit.index) {
+                    if (g_applicationRestoreReady) applyProfileSnapshot(g_applicationRestoreProfile);
+                    g_activeApplicationProfile = -1;
+                    g_applicationRestoreReady = false;
+                }
+                g_activeApplicationExecutable.clear();
+                saveAutomationSettings();
+            }
+            break;
+        case Action::ToggleGlobalHotkeys:
+            g_globalHotkeysEnabled = !g_globalHotkeysEnabled;
+            refreshGlobalHotkeys();
+            saveAutomationSettings();
+            break;
+        case Action::ToggleSleepLights:
+            g_sleepLightsEnabled = !g_sleepLightsEnabled;
+            saveAutomationSettings();
+            break;
+        case Action::ToggleRestoreOnWake:
+            g_restoreOnWake = !g_restoreOnWake;
+            saveAutomationSettings();
+            break;
+        case Action::ToggleSmartMode:
+            g_smartModeEnabled = !g_smartModeEnabled;
+            if (!g_smartModeEnabled && g_smartThrottleActive) {
+                g_effectQuality = std::clamp(g_smartSavedEffectQuality, 0, 2);
+                g_smartThrottleActive = false;
+            }
+            if (g_smartModeEnabled) evaluateSmartMode();
+            saveAutomationSettings();
+            break;
+        case Action::BackupAll: exportCompleteBackup(); break;
+        case Action::RestoreAll:
+            importCompleteBackup();
+            refreshGlobalHotkeys();
+            break;
+        case Action::SelectTextScale:
+            if (hit.index >= 0 && hit.index <= 2) {
+                g_textScale = hit.index;
+                g_gamepadPageCache.reset();
+                saveAutomationSettings();
+            }
+            break;
+        case Action::ToggleHighContrast:
+            g_highContrast = !g_highContrast;
+            g_gamepadPageCache.reset();
+            saveAutomationSettings();
+            break;
+        case Action::ToggleCompactDashboard:
+            g_compactDashboard = !g_compactDashboard;
+            saveAutomationSettings();
+            break;
+        case Action::ClearTelemetry:
+            g_telemetry.clear();
+            saveTelemetryHistory();
+            g_comfortStatus = localized(L"Historique matériel effacé.", L"Hardware history cleared.",
+                                        L"Hardware-Verlauf gelöscht.", L"硬件历史记录已清除。");
+            break;
         case Action::DiagnosticCopy: copyDiagnosticReport(); break;
         case Action::ToggleStartup:
             setStartupEnabled(!g_startupEnabled);
@@ -9090,8 +10007,18 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             g_rememberLastPage = true;
             g_reduceMotion = false;
             g_dualSensePlayerLedsEnabled = true;
+            g_applicationProfilesEnabled = true;
+            g_globalHotkeysEnabled = true;
+            g_sleepLightsEnabled = true;
+            g_restoreOnWake = true;
+            g_smartModeEnabled = false;
+            g_gamepadAutoPriority = true;
+            g_textScale = 1;
+            g_highContrast = false;
+            g_compactDashboard = false;
             g_gamepadPageCache.reset();
             applyWindowChromeTheme();
+            refreshGlobalHotkeys();
             saveAutomationSettings();
             break;
         case Action::ScheduleToggle:
@@ -9358,6 +10285,18 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 }
                 g_gamepadRawInputReady = RegisterRawInputDevices(devices, 3, sizeof(RAWINPUTDEVICE)) == TRUE;
             }
+            refreshGlobalHotkeys();
+            g_wtsLibrary = LoadLibraryW(L"wtsapi32.dll");
+            if (g_wtsLibrary) {
+                WtsRegisterSessionNotificationFn registerSessionNotification = nullptr;
+                FARPROC registerAddress = GetProcAddress(g_wtsLibrary, "WTSRegisterSessionNotification");
+                FARPROC unregisterAddress = GetProcAddress(g_wtsLibrary, "WTSUnRegisterSessionNotification");
+                static_assert(sizeof(registerSessionNotification) == sizeof(registerAddress));
+                static_assert(sizeof(g_wtsUnregisterSessionNotification) == sizeof(unregisterAddress));
+                std::memcpy(&registerSessionNotification, &registerAddress, sizeof(registerAddress));
+                std::memcpy(&g_wtsUnregisterSessionNotification, &unregisterAddress, sizeof(unregisterAddress));
+                if (registerSessionNotification) registerSessionNotification(window, 0);
+            }
             SetTimer(window, APP_TIMER, 16, nullptr);
             startScan(false);
             return 0;
@@ -9380,6 +10319,29 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 InvalidateRect(window, nullptr, FALSE);
             }
             return TRUE;
+        case WM_POWERBROADCAST:
+            if (wParam == PBT_APMSUSPEND) handleAwayState(true);
+            else if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND) handleAwayState(false);
+            return TRUE;
+        case WM_WTSSESSION_CHANGE_MESSAGE:
+            if (wParam == WTS_SESSION_LOCK_VALUE) handleAwayState(true);
+            else if (wParam == WTS_SESSION_UNLOCK_VALUE) handleAwayState(false);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        case WM_HOTKEY:
+            if (wParam >= HOTKEY_PROFILE_1 && wParam <= HOTKEY_PROFILE_3) {
+                const int profile = static_cast<int>(wParam - HOTKEY_PROFILE_1);
+                if (profile >= 0 && profile < static_cast<int>(g_profiles.size()) && g_profiles[profile].saved) {
+                    rememberUndoSnapshot();
+                    applyProfileSlot(profile);
+                }
+            } else if (wParam == HOTKEY_LIGHTS) {
+                toggleQuickLights();
+            } else if (wParam == HOTKEY_UNDO) {
+                restoreUndoSnapshot();
+            }
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
         case WM_TIMER:
             if (wParam == APP_TIMER) {
                 const ULONGLONG now = GetTickCount64();
@@ -9439,6 +10401,14 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                     g_lastScheduleCheck = GetTickCount64();
                     evaluateSchedule(false);
                 }
+                if (now - g_lastApplicationProfileCheck >= 1500) {
+                    g_lastApplicationProfileCheck = now;
+                    evaluateApplicationProfiles(false);
+                }
+                if (now - g_lastSmartModeCheck >= 5000) {
+                    g_lastSmartModeCheck = now;
+                    evaluateSmartMode();
+                }
             }
             return 0;
         case WM_SCAN_COMPLETE: {
@@ -9458,12 +10428,19 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 }
             }
             g_rgbDevices = std::move(result->rgb);
-            if (dualSenseDeviceCount() == 0) g_dualSenseLightingApplied = false;
+            if (dualSenseDeviceCount() == 0) {
+                g_dualSenseLightingApplied = false;
+                if (g_gamepadAutoPriority && (g_xboxModeEnabled || g_xboxBridgeProcess)) stopXboxBridge();
+            } else if (g_gamepadAutoPriority && g_xboxBridgeStatus == XboxBridgeStatus::Off) {
+                g_xboxModeEnabled = true;
+                if (startXboxBridge() && g_dualSenseLive.seen) sendXboxState(g_dualSenseLive);
+            }
             g_pluginProviders = std::move(result->pluginProviders);
             g_rejectedPlugins = result->rejectedPlugins;
             g_fans = std::move(result->fans);
             g_cpuTemperature = result->cpuTemperature;
             g_gpuTemperature = result->gpuTemperature;
+            recordTelemetrySample();
             g_duckyDetected = result->ducky;
             if (!g_duckyDetected && g_page == Page::DuckyAssistant) {
                 g_page = Page::Devices;
@@ -9782,7 +10759,15 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             return 0;
         case WM_DESTROY:
             saveAutomationSettings();
+            saveTelemetryHistory();
             KillTimer(window, APP_TIMER);
+            unregisterGlobalHotkeys();
+            if (g_wtsUnregisterSessionNotification) g_wtsUnregisterSessionNotification(window);
+            g_wtsUnregisterSessionNotification = nullptr;
+            if (g_wtsLibrary) {
+                FreeLibrary(g_wtsLibrary);
+                g_wtsLibrary = nullptr;
+            }
             stopXboxBridge();
             if (g_deviceNotification) {
                 UnregisterDeviceNotification(g_deviceNotification);
@@ -9954,6 +10939,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
     }
     loadStoredProfiles();
     loadAutomationSettings();
+    loadTelemetryHistory();
     if (arguments) {
         for (int index = 1; index < argumentCount; ++index) {
             const std::wstring argument = arguments[index];

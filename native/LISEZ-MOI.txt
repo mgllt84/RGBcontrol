@@ -1,4 +1,4 @@
-RGBCcontrol 0.16.21 — application native C++ pour Windows
+RGBCcontrol 0.16.22 — application native C++ pour Windows
 =====================================================
 
 Installation
@@ -177,6 +177,12 @@ sans ralentir les pressions franches. Si la manette est débranchée, un état
 neutre est envoyé sous 120 ms afin qu'aucune touche ne reste bloquée. Une fois
 le pilote installé, le mode Xbox peut démarrer sans relancer systématiquement
 l'application en administrateur.
+
+La version 0.16.22 modernise l'interface sans retirer aucune fonction. Deux
+thèmes complets sont disponibles : un mode sombre gris et un mode clair blanc,
+avec des cartes plus aérées et des contrastes adaptés. Le choix est mémorisé
+dans Paramètres et le bouton soleil placé à côté du nom RGBCcontrol permet de
+basculer instantanément d'un thème à l'autre sur n'importe quelle page.
 
 Le choix « Manette Xbox 360 » lance un pont XInput autonome basé sur HIDMaestro
 (mode utilisateur, sans ViGEmBus). Il crée une manette virtuelle uniquement

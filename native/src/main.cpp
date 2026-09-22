@@ -56,17 +56,18 @@ constexpr UINT TRAY_PROFILE_FIRST = 4110;
 constexpr UINT TRAY_EXIT = 4199;
 constexpr int kHeaderHeight = 68;
 constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.21";
+constexpr wchar_t kAppVersion[] = L"0.16.22";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
 
 enum class Page { Dashboard, Effects, Profiles, Fans, Diagnostics, Settings, Devices, DuckyAssistant, Compatibility, Gamepads };
 enum class Language { French, English, German, Chinese };
+enum class AppTheme { Dark, Light };
 enum class FanProfile { Auto, Quiet, Balanced, Performance, Custom };
 enum class Action {
     None, NavDashboard, NavDevices, NavGamepads, NavEffects, NavProfiles, NavFans, NavDiagnostics, NavSettings, Donate, Refresh,
-    HeaderStatus, HeaderUpdate, Minimize, Maximize, Close,
+    HeaderStatus, HeaderUpdate, ToggleTheme, Minimize, Maximize, Close,
     DeviceOpenEffects, DeviceOpenFans, DeviceOpenDiagnostics, DeviceOpenDuckyAssistant, DeviceOpenCompatibility,
     ToggleRgb, PickColor, SetColor, ApplyColor, Brightness,
     SelectEffect, EffectSpeed, EffectIntensity, ApplyEffect, AmbientMonitor, AmbientZones, AmbientSaturation,
@@ -75,7 +76,7 @@ enum class Action {
     ProfileSave, ProfileLoad, ProfileDelete, ProfileExport, ProfileImport, DiagnosticCopy,
     ToggleStartup, ToggleMinimizeToTray, ScheduleToggle, ScheduleDayProfile, ScheduleNightProfile,
     ScheduleDayHourDown, ScheduleDayHourUp, ScheduleNightHourDown, ScheduleNightHourUp,
-    SelectLanguage, Update, SelectAccent, SelectScanInterval, SelectEffectQuality,
+    SelectLanguage, SelectTheme, Update, SelectAccent, SelectScanInterval, SelectEffectQuality,
     ToggleStartupQuiet, ToggleCloseToTray, ToggleRememberPage, ToggleReduceMotion, ResetPreferences,
     PickerBackdrop, PickerWheel, PickerBrightness, PickerPreset, PickerCancel, PickerApply,
     DuckyBack, DuckyMode, DuckyPrevious, DuckyNext, DuckySync, DuckyOpenManual,
@@ -292,6 +293,7 @@ RectF g_gamepadModelRect;
 fs::path g_appDirectory;
 Page g_page = Page::Dashboard;
 Language g_language = Language::French;
+AppTheme g_appTheme = AppTheme::Dark;
 FanProfile g_fanProfile = FanProfile::Auto;
 std::vector<HitTarget> g_hits;
 std::vector<DeferredTextCommand> g_deferredText;
@@ -1313,6 +1315,7 @@ void saveAutomationSettings() {
     writeIniInteger(path, section, L"RememberLastPage", g_rememberLastPage ? 1 : 0);
     writeIniInteger(path, section, L"LastPage", static_cast<int>(g_page));
     writeIniInteger(path, section, L"ReduceMotion", g_reduceMotion ? 1 : 0);
+    writeIniInteger(path, section, L"Theme", static_cast<int>(g_appTheme));
     writeIniInteger(path, section, L"AccentPreset", g_accentPreset);
     writeIniInteger(path, section, L"DetectionInterval", g_detectionIntervalSeconds);
     writeIniInteger(path, section, L"EffectQuality", g_effectQuality.load());
@@ -1336,6 +1339,7 @@ void loadAutomationSettings() {
     g_closeToTray = readIniInteger(path, section, L"CloseToTray", 0) != 0;
     g_rememberLastPage = readIniInteger(path, section, L"RememberLastPage", 1) != 0;
     g_reduceMotion = readIniInteger(path, section, L"ReduceMotion", 0) != 0;
+    g_appTheme = static_cast<AppTheme>(std::clamp(readIniInteger(path, section, L"Theme", 0), 0, 1));
     g_accentPreset = std::clamp(readIniInteger(path, section, L"AccentPreset", 0), 0,
                                 static_cast<int>(std::size(kAccentChoices)) - 1);
     const int storedInterval = readIniInteger(path, section, L"DetectionInterval", 5);
@@ -1562,11 +1566,82 @@ Color accentButtonText() {
 Color accentTint(double amount, BYTE alpha = 255) {
     amount = std::clamp(amount, 0.0, 1.0);
     const std::uint32_t source = activeAccentRgb();
+    if (g_appTheme == AppTheme::Light) {
+        // On a white canvas, tinting toward white erases labels and selection
+        // states.  Use a slightly inkier accent instead, keeping the same hue.
+        const double factor = 0.86 - amount * 0.20;
+        auto shade = [factor](std::uint32_t channel) {
+            return static_cast<std::uint32_t>(std::lround(channel * factor));
+        };
+        return Color(alpha, static_cast<BYTE>(shade((source >> 16) & 255)),
+                     static_cast<BYTE>(shade((source >> 8) & 255)), static_cast<BYTE>(shade(source & 255)));
+    }
     auto tint = [amount](std::uint32_t channel) {
         return static_cast<std::uint32_t>(std::lround(channel + (255.0 - channel) * amount));
     };
     return Color(alpha, static_cast<BYTE>(tint((source >> 16) & 255)),
                  static_cast<BYTE>(tint((source >> 8) & 255)), static_cast<BYTE>(tint(source & 255)));
+}
+
+bool lightTheme() {
+    return g_appTheme == AppTheme::Light;
+}
+
+Color primaryTextColor(BYTE alpha = 255) {
+    return lightTheme() ? Color(alpha, 25, 31, 45) : Color(alpha, 244, 246, 251);
+}
+
+Color secondaryTextColor(BYTE alpha = 255) {
+    return lightTheme() ? Color(alpha, 91, 103, 126) : Color(alpha, 143, 152, 174);
+}
+
+Color themeTextColor(Color color) {
+    if (!lightTheme()) return color;
+    const int red = color.GetR(), green = color.GetG(), blue = color.GetB();
+    const int maximum = std::max({red, green, blue});
+    const int minimum = std::min({red, green, blue});
+    const int luminance = (red * 299 + green * 587 + blue * 114) / 1000;
+    if (maximum - minimum > 46) return color;
+    if (luminance >= 205) return Color(color.GetA(), 25, 31, 45);
+    if (luminance >= 128) return Color(color.GetA(), 91, 103, 126);
+    if (luminance >= 78) return Color(color.GetA(), 71, 84, 105);
+    return color;
+}
+
+Color themeNeutralSurface(Color color, bool border = false) {
+    if (!lightTheme() || color.GetA() < 160) return color;
+    const int red = color.GetR(), green = color.GetG(), blue = color.GetB();
+    const int maximum = std::max({red, green, blue});
+    const int minimum = std::min({red, green, blue});
+    if (border && maximum > 180 && maximum - minimum <= 28) {
+        return Color(color.GetA(), 116, 128, 151);
+    }
+    if (maximum > 120 || maximum - minimum > 28) return color;
+    if (border) return Color(color.GetA(), 213, 219, 231);
+    const int luminance = (red * 299 + green * 587 + blue * 114) / 1000;
+    if (luminance <= 21) return Color(color.GetA(), 248, 250, 253);
+    if (luminance <= 37) return Color(color.GetA(), 255, 255, 255);
+    if (luminance <= 58) return Color(color.GetA(), 239, 242, 248);
+    return Color(color.GetA(), 226, 231, 240);
+}
+
+void applyWindowChromeTheme() {
+    if (!g_window) return;
+    BOOL dark = lightTheme() ? FALSE : TRUE;
+    DwmSetWindowAttribute(g_window, 20, &dark, sizeof(dark));
+    const COLORREF border = lightTheme() ? RGB(210, 216, 228) : RGB(61, 66, 78);
+    DwmSetWindowAttribute(g_window, 34, &border, sizeof(border));
+}
+
+void selectAppTheme(AppTheme theme) {
+    if (g_appTheme == theme) return;
+    g_appTheme = theme;
+    g_gamepadPageCache.reset();
+    g_gamepadPageCacheWidth = 0;
+    g_gamepadPageCacheHeight = 0;
+    applyWindowChromeTheme();
+    saveAutomationSettings();
+    if (g_window) InvalidateRect(g_window, nullptr, FALSE);
 }
 
 std::uint32_t hsvColor(double hue, double saturation, double value) {
@@ -1714,25 +1789,29 @@ void fillRound(Graphics& graphics, const RectF& rect, float radius, Color color)
          (color.GetR() == 22 && color.GetG() == 26 && color.GetB() == 37));
     if (primarySurface || secondarySurface) {
         GraphicsPath shadowPath;
-        roundedPath(shadowPath, RectF(rect.X, rect.Y + 7.0f, rect.Width, rect.Height), radius);
-        SolidBrush shadow(Color(primarySurface ? 66 : 42, 0, 0, 0));
+        roundedPath(shadowPath, RectF(rect.X, rect.Y + (lightTheme() ? 4.0f : 7.0f), rect.Width, rect.Height), radius);
+        SolidBrush shadow(lightTheme() ? Color(primarySurface ? 25 : 17, 37, 52, 78)
+                                       : Color(primarySurface ? 66 : 42, 0, 0, 0));
         graphics.FillPath(&shadow, &shadowPath);
         LinearGradientBrush glass(PointF(rect.X, rect.Y), PointF(rect.X, rect.GetBottom()),
-                                  primarySurface ? Color(250, 27, 32, 46) : Color(248, 22, 26, 38),
-                                  primarySurface ? Color(250, 18, 22, 33) : Color(248, 15, 19, 29));
+                                  lightTheme() ? (primarySurface ? Color(255, 255, 255, 255) : Color(255, 250, 251, 254))
+                                               : (primarySurface ? Color(250, 27, 32, 46) : Color(248, 22, 26, 38)),
+                                  lightTheme() ? (primarySurface ? Color(255, 248, 250, 253) : Color(255, 244, 247, 252))
+                                               : (primarySurface ? Color(250, 18, 22, 33) : Color(248, 15, 19, 29)));
         graphics.FillPath(&glass, &path);
-        Pen topLight(primarySurface ? Color(28, 255, 255, 255) : Color(18, 255, 255, 255), 1.0f);
+        Pen topLight(lightTheme() ? Color(255, 218, 224, 235)
+                                  : (primarySurface ? Color(28, 255, 255, 255) : Color(18, 255, 255, 255)), 1.0f);
         graphics.DrawPath(&topLight, &path);
         return;
     }
-    SolidBrush brush(color);
+    SolidBrush brush(themeNeutralSurface(color));
     graphics.FillPath(&brush, &path);
 }
 
 void strokeRound(Graphics& graphics, const RectF& rect, float radius, Color color, float width = 1.0f) {
     GraphicsPath path;
     roundedPath(path, rect, radius);
-    Pen pen(color, width);
+    Pen pen(themeNeutralSurface(color, true), width);
     graphics.DrawPath(&pen, &path);
 }
 
@@ -1885,7 +1964,10 @@ void drawCachedText(Graphics& graphics, const std::wstring& value, const RectF& 
                     Color color, FontStyle style, StringAlignment horizontal,
                     StringAlignment vertical, bool wrapped) {
     if (value.empty() || rect.Width <= 0.0f || rect.Height <= 0.0f) return;
-    if (color.GetA() == 255) {
+    // GDI ClearType is extremely fast on the dark interface, but drawing it
+    // into a GDI+ back buffer leaves dark colour fringes on white surfaces.
+    // The light theme therefore uses the cached GDI+ antialiased raster path.
+    if (color.GetA() == 255 && !lightTheme()) {
         DeferredTextCommand command{value, rect, size, color, style, horizontal, vertical, wrapped};
         if (g_collectOpaqueText) {
             g_deferredText.push_back(std::move(command));
@@ -1940,12 +2022,12 @@ void drawCachedText(Graphics& graphics, const std::wstring& value, const RectF& 
 void text(Graphics& graphics, const std::wstring& value, const RectF& rect, float size,
           Color color, FontStyle style = FontStyleRegular, StringAlignment horizontal = StringAlignmentNear,
           StringAlignment vertical = StringAlignmentNear) {
-    drawCachedText(graphics, value, rect, size, color, style, horizontal, vertical, false);
+    drawCachedText(graphics, value, rect, size, themeTextColor(color), style, horizontal, vertical, false);
 }
 
 void textWrapped(Graphics& graphics, const std::wstring& value, const RectF& rect, float size,
                  Color color, FontStyle style = FontStyleRegular, StringAlignment vertical = StringAlignmentNear) {
-    drawCachedText(graphics, value, rect, size, color, style, StringAlignmentNear, vertical, true);
+    drawCachedText(graphics, value, rect, size, themeTextColor(color), style, StringAlignmentNear, vertical, true);
 }
 
 void addHit(const RectF& rect, Action action, int index = -1, std::uint32_t value = 0) {
@@ -3686,7 +3768,9 @@ void drawButton(Graphics& graphics, const RectF& rect, const std::wstring& label
     roundedPath(path, visual, radius);
     GraphicsPath shadowPath;
     roundedPath(shadowPath, RectF(visual.X, visual.Y + 4, visual.Width, visual.Height), radius);
-    SolidBrush shadow(Color(static_cast<BYTE>(accent && enabled ? 38 + 22 * hoverProgress : 25), 0, 0, 0));
+    SolidBrush shadow(lightTheme()
+        ? Color(static_cast<BYTE>(accent && enabled ? 24 + 12 * hoverProgress : 17), 41, 54, 80)
+        : Color(static_cast<BYTE>(accent && enabled ? 38 + 22 * hoverProgress : 25), 0, 0, 0));
     graphics.FillPath(&shadow, &shadowPath);
     const Color fill = !enabled ? Color(255, 24, 28, 39)
         : accent ? accentColor()
@@ -3703,7 +3787,7 @@ void drawButton(Graphics& graphics, const RectF& rect, const std::wstring& label
             graphics.DrawPath(&halo, &path);
         }
     } else {
-        SolidBrush brush(fill);
+        SolidBrush brush(themeNeutralSurface(fill));
         graphics.FillPath(&brush, &path);
     }
     strokeRound(graphics, visual, radius, border, hovered ? 1.35f : 1.0f);
@@ -3712,14 +3796,16 @@ void drawButton(Graphics& graphics, const RectF& rect, const std::wstring& label
         graphics.DrawLine(&highlight, visual.X + radius, visual.Y + 1.0f,
                           visual.GetRight() - radius, visual.Y + 1.0f);
     }
-    text(graphics, label, visual, 11, enabled ? (accent ? accentButtonText() : Color(255, 235, 238, 247)) : Color(255, 101, 109, 129),
-         FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
+    const Color labelColor = enabled ? (accent ? accentButtonText() : themeTextColor(Color(255, 235, 238, 247)))
+                                     : themeTextColor(Color(255, 101, 109, 129));
+    drawCachedText(graphics, label, visual, 11, labelColor, FontStyleBold,
+                   StringAlignmentCenter, StringAlignmentCenter, false);
     if (enabled) addHit(rect, action, index);
 }
 
 void drawSlider(Graphics& graphics, const RectF& rect, int value, int minimum, Action action, int index = -1) {
     RectF track(rect.X, rect.Y + rect.Height / 2 - 3, rect.Width, 6);
-    fillRound(graphics, track, 3, Color(255, 12, 15, 23));
+    fillRound(graphics, track, 3, lightTheme() ? Color(255, 225, 230, 239) : Color(255, 12, 15, 23));
     strokeRound(graphics, track, 3, Color(255, 40, 47, 65));
     float ratio = (value - minimum) / static_cast<float>(std::max(1, 100 - minimum));
     ratio = std::clamp(ratio, 0.0f, 1.0f);
@@ -3732,7 +3818,7 @@ void drawSlider(Graphics& graphics, const RectF& rect, int value, int minimum, A
     float thumbX = track.X + track.Width * ratio;
     SolidBrush glow(accentColor(52));
     graphics.FillEllipse(&glow, RectF(thumbX - 11.0f, track.Y + track.Height / 2 - 11.0f, 22.0f, 22.0f));
-    SolidBrush thumb(Color(255, 244, 246, 252));
+    SolidBrush thumb(lightTheme() ? Color(255, 255, 255, 255) : Color(255, 244, 246, 252));
     graphics.FillEllipse(&thumb, RectF(thumbX - 6.5f, track.Y + track.Height / 2 - 6.5f, 13.0f, 13.0f));
     Pen border(accentColor(), 2.2f);
     graphics.DrawEllipse(&border, RectF(thumbX - 7.5f, track.Y + track.Height / 2 - 7.5f, 15.0f, 15.0f));
@@ -3817,9 +3903,10 @@ void drawBaseLogoRound(Graphics& graphics, const RectF& destination, double opac
 
 void drawHeader(Graphics& graphics, int width) {
     LinearGradientBrush header(PointF(0, 0), PointF(static_cast<REAL>(width), static_cast<REAL>(kHeaderHeight)),
-                               Color(250, 9, 12, 20), Color(246, 15, 18, 29));
+                               lightTheme() ? Color(255, 255, 255, 255) : Color(250, 24, 26, 32),
+                               lightTheme() ? Color(255, 247, 249, 253) : Color(250, 31, 34, 41));
     graphics.FillRectangle(&header, 0, 0, width, kHeaderHeight);
-    Pen line(Color(178, 35, 41, 57));
+    Pen line(lightTheme() ? Color(255, 218, 224, 235) : Color(178, 54, 59, 70));
     graphics.DrawLine(&line, 0, kHeaderHeight - 1, width, kHeaderHeight - 1);
     SolidBrush logoGlow(accentColor(26));
     graphics.FillEllipse(&logoGlow, RectF(14, 8, 50, 50));
@@ -3845,10 +3932,33 @@ void drawHeader(Graphics& graphics, int width) {
     graphics.DrawEllipse(&logoRing, logoBounds);
     Pen logoHighlight(Color(88, 255, 255, 255), 1.0f);
     graphics.DrawArc(&logoHighlight, RectF(22, 16, 34, 34), 205.0f, 105.0f);
-    text(graphics, L"RGBCcontrol", RectF(70, 11, 166, 25), 17, Color(255, 246, 247, 251), FontStyleBold,
+    text(graphics, L"RGBCcontrol", RectF(70, 11, 116, 25), 17, primaryTextColor(), FontStyleBold,
          StringAlignmentNear, StringAlignmentCenter);
     text(graphics, L"CONTROL STUDIO", RectF(71, 36, 145, 15), 8, accentTint(0.38), FontStyleBold,
          StringAlignmentNear, StringAlignmentCenter);
+
+    const RectF themeToggle(188, 16, 36, 36);
+    const bool themeHovered = g_hoverAction == Action::ToggleTheme;
+    fillRound(graphics, themeToggle, 11,
+              lightTheme() ? Color(255, 255, 248, 228)
+                           : (themeHovered ? Color(255, 55, 58, 68) : Color(255, 38, 41, 49)));
+    strokeRound(graphics, themeToggle, 11,
+                lightTheme() ? Color(255, 238, 194, 88)
+                             : (themeHovered ? Color(255, 116, 123, 143) : Color(255, 65, 71, 84)));
+    const float sunX = themeToggle.X + themeToggle.Width / 2.0f;
+    const float sunY = themeToggle.Y + themeToggle.Height / 2.0f;
+    const Color sunColor = lightTheme() ? Color(255, 222, 153, 29) : Color(255, 255, 203, 82);
+    SolidBrush sunBrush(sunColor);
+    Pen sunPen(sunColor, 1.5f);
+    graphics.FillEllipse(&sunBrush, RectF(sunX - 4.5f, sunY - 4.5f, 9.0f, 9.0f));
+    constexpr float pi = 3.14159265358979323846f;
+    for (int ray = 0; ray < 8; ++ray) {
+        const float angle = ray * pi / 4.0f;
+        graphics.DrawLine(&sunPen,
+                          sunX + std::cos(angle) * 7.5f, sunY + std::sin(angle) * 7.5f,
+                          sunX + std::cos(angle) * 10.5f, sunY + std::sin(angle) * 10.5f);
+    }
+    addHit(themeToggle, Action::ToggleTheme);
 
     RectF controls(static_cast<float>(width - 164), 12, 148, 44);
     fillRound(graphics, controls, 13, Color(228, 18, 22, 33));
@@ -3944,8 +4054,8 @@ void drawHeader(Graphics& graphics, int width) {
         strokeRound(graphics, close, 9, Color(255, 225, 84, 105));
     }
 
-    const Color normalGlyph(255, 197, 204, 222);
-    const Color activeGlyph(255, 245, 242, 255);
+    const Color normalGlyph = lightTheme() ? Color(255, 83, 94, 116) : Color(255, 197, 204, 222);
+    const Color activeGlyph = lightTheme() ? Color(255, 25, 31, 45) : Color(255, 245, 242, 255);
     Pen minimizePen(minimizeHovered ? activeGlyph : normalGlyph, 1.8f);
     const float minimizeCenterX = minimize.X + minimize.Width / 2.0f;
     const float minimizeCenterY = minimize.Y + minimize.Height / 2.0f;
@@ -3957,7 +4067,9 @@ void drawHeader(Graphics& graphics, int width) {
     const float maximizeCenterY = maximize.Y + maximize.Height / 2.0f;
     if (g_window && IsZoomed(g_window)) {
         graphics.DrawRectangle(&maximizePen, RectF(maximizeCenterX - 4.0f, maximizeCenterY - 6.0f, 11.0f, 10.0f));
-        SolidBrush buttonBackground(maximizeHovered ? Color(255, 46, 51, 71) : Color(255, 22, 27, 40));
+        SolidBrush buttonBackground(lightTheme()
+            ? (maximizeHovered ? Color(255, 232, 236, 244) : Color(255, 249, 250, 252))
+            : (maximizeHovered ? Color(255, 46, 51, 71) : Color(255, 22, 27, 40)));
         graphics.FillRectangle(&buttonBackground, RectF(maximizeCenterX - 7.0f, maximizeCenterY - 2.0f, 11.0f, 10.0f));
         graphics.DrawRectangle(&maximizePen, RectF(maximizeCenterX - 7.0f, maximizeCenterY - 2.0f, 11.0f, 10.0f));
     } else {
@@ -3991,6 +4103,13 @@ void drawHeaderTooltip(Graphics& graphics, int width) {
             anchor = controlsX - 35.0f;
             tooltipWidth = 132;
             break;
+        case Action::ToggleTheme:
+            label = lightTheme()
+                ? localized(L"Passer au thème sombre", L"Switch to dark theme", L"Zum dunklen Design", L"切换到深色主题")
+                : localized(L"Passer au thème clair", L"Switch to light theme", L"Zum hellen Design", L"切换到浅色主题");
+            anchor = 206.0f;
+            tooltipWidth = 168;
+            break;
         case Action::Minimize:
             label = localized(L"Réduire", L"Minimize", L"Minimieren", L"最小化");
             anchor = controlsX + 27.0f;
@@ -4019,7 +4138,7 @@ void drawHeaderTooltip(Graphics& graphics, int width) {
     fillRound(graphics, tooltip, 8, Color(255, 28, 33, 47));
     strokeRound(graphics, tooltip, 8, Color(255, 63, 71, 94));
     PointF pointer[] = {PointF(anchor - 5, 66), PointF(anchor + 5, 66), PointF(anchor, 61)};
-    SolidBrush pointerBrush(Color(255, 28, 33, 47));
+    SolidBrush pointerBrush(themeNeutralSurface(Color(255, 28, 33, 47)));
     graphics.FillPolygon(&pointerBrush, pointer, 3);
     text(graphics, label, tooltip, 10, Color(255, 229, 232, 241), FontStyleRegular, StringAlignmentCenter, StringAlignmentCenter);
 }
@@ -4124,9 +4243,10 @@ void drawNavigationIcon(Graphics& graphics, int iconIndex, const RectF& bounds, 
 
 void drawNavigation(Graphics& graphics, int height) {
     LinearGradientBrush sidebar(PointF(0, static_cast<REAL>(kHeaderHeight)), PointF(static_cast<REAL>(kSidebarWidth), static_cast<REAL>(height)),
-                                Color(248, 11, 14, 23), Color(244, 14, 18, 28));
+                                lightTheme() ? Color(255, 250, 251, 254) : Color(255, 27, 29, 35),
+                                lightTheme() ? Color(255, 244, 247, 252) : Color(255, 32, 35, 42));
     graphics.FillRectangle(&sidebar, 0, kHeaderHeight, kSidebarWidth, height - kHeaderHeight);
-    Pen line(Color(188, 33, 39, 55));
+    Pen line(lightTheme() ? Color(255, 218, 224, 235) : Color(188, 57, 62, 73));
     graphics.DrawLine(&line, kSidebarWidth - 1, kHeaderHeight, kSidebarWidth - 1, height);
     text(graphics, localized(L"NAVIGATION", L"NAVIGATION", L"NAVIGATION", L"导航"), RectF(20, 91, 150, 18), 9,
          Color(255, 101, 112, 136), FontStyleBold);
@@ -4206,7 +4326,9 @@ void drawDashboard(Graphics& graphics, int width, int height, float originY) {
     float y = originY + 86;
     int totalDevices = static_cast<int>(g_rgbDevices.size()) + (g_duckyDetected ? 1 : 0);
     text(graphics, std::wstring(localized(L"Appareils détectés  ", L"Devices found  ", L"Erkannte Geräte  ", L"已检测设备  ")) + std::to_wstring(totalDevices), RectF(x, y, 360, 22), 13, Color(255, 220, 224, 234), FontStyleBold);
-    text(graphics, g_status, RectF(width - 480.0f, y, 440, 22), 10, Color(255, 117, 205, 180), FontStyleRegular, StringAlignmentFar);
+    text(graphics, g_status, RectF(width - 480.0f, y, 440, 22), 10,
+         lightTheme() ? Color(255, 42, 139, 108) : Color(255, 117, 205, 180),
+         FontStyleRegular, StringAlignmentFar);
     y += 34;
     const float cardWidth = std::max(220.0f, (available - 24.0f) / 3.0f);
     int column = 0;
@@ -4228,7 +4350,9 @@ void drawDashboard(Graphics& graphics, int width, int height, float originY) {
         text(graphics, device.selected
                  ? localized(L"Inclus · cliquer pour exclure", L"Included · click to exclude", L"Aktiv · zum Ausschließen klicken", L"已包含 · 点击排除")
                  : localized(L"Exclu · cliquer pour inclure", L"Excluded · click to include", L"Aus · zum Einschließen klicken", L"已排除 · 点击包含"), selector, 10,
-             device.selected ? Color(255, 209, 198, 255) : Color(255, 135, 144, 165), FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
+             device.selected ? (lightTheme() ? accentTint(0.36) : Color(255, 209, 198, 255))
+                             : Color(255, 135, 144, 165),
+             FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
         addHit(card, Action::ToggleRgb, index);
         if (++column == 3) { column = 0; y += 118; }
     }
@@ -4257,7 +4381,8 @@ void drawDashboard(Graphics& graphics, int width, int height, float originY) {
     fillRound(graphics, RectF(colorCard.X + 120, colorCard.Y + 112, colorCard.Width - 142, 42), 9, Color(255, 17, 20, 29));
     text(graphics, hexColor(g_baseColor), RectF(colorCard.X + 133, colorCard.Y + 112, colorCard.Width - 155, 42), 14, Color::White, FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
     text(graphics, localized(L"Luminosité", L"Brightness", L"Helligkeit", L"亮度"), RectF(colorCard.X + 22, colorCard.Y + 174, 150, 20), 12, Color(255, 220, 224, 234));
-    text(graphics, std::to_wstring(g_brightness) + L" %", RectF(colorCard.GetRight() - 100, colorCard.Y + 174, 78, 20), 12, Color(255, 200, 187, 255), FontStyleBold, StringAlignmentFar);
+    text(graphics, std::to_wstring(g_brightness) + L" %", RectF(colorCard.GetRight() - 100, colorCard.Y + 174, 78, 20), 12,
+         lightTheme() ? accentTint(0.28) : Color(255, 200, 187, 255), FontStyleBold, StringAlignmentFar);
     drawSlider(graphics, RectF(colorCard.X + 22, colorCard.Y + 198, colorCard.Width - 44, 30), g_brightness, 0, Action::Brightness);
     const std::uint32_t swatches[] = {0x7C5CFF, 0x149CFF, 0x00D69E, 0xFFB83D, 0xFF4F70, 0xFFFFFF};
     const float applyWidth = std::clamp(colorCard.Width * 0.40f, 176.0f, 208.0f);
@@ -7025,6 +7150,60 @@ void drawSettings(Graphics& graphics, int width, int height, float originY) {
          RectF(x, originY + 61, available, 20), 11, Color(255, 137, 146, 167));
 
     float y = originY + 102;
+    RectF appearanceCard(x, y, available, 144);
+    fillRound(graphics, appearanceCard, 18, Color(255, 28, 32, 45));
+    strokeRound(graphics, appearanceCard, 18, Color(255, 39, 45, 61));
+    text(graphics, localized(L"Thème de l'application", L"Application theme", L"Design der Anwendung", L"应用主题"),
+         RectF(appearanceCard.X + 20, appearanceCard.Y + 18, 290, 23), 15, Color::White, FontStyleBold);
+    textWrapped(graphics,
+                localized(L"Choisis une interface gris sombre ou blanche. Le soleil dans la barre du haut permet aussi de basculer instantanément.",
+                          L"Choose a dark grey or white interface. The sun in the top bar also switches instantly.",
+                          L"Wähle eine dunkelgraue oder weiße Oberfläche. Die Sonne oben wechselt ebenfalls sofort.",
+                          L"选择深灰色或白色界面，也可点击顶部的太阳立即切换。"),
+                RectF(appearanceCard.X + 20, appearanceCard.Y + 48, std::max(210.0f, appearanceCard.Width * 0.43f), 68),
+                10, Color(255, 137, 146, 167));
+
+    const float themeAreaX = appearanceCard.X + std::max(330.0f, appearanceCard.Width * 0.48f);
+    const float themeGap = 10.0f;
+    const float themeWidth = (appearanceCard.GetRight() - themeAreaX - 20.0f - themeGap) / 2.0f;
+    const wchar_t* themeNames[] = {
+        localized(L"Sombre", L"Dark", L"Dunkel", L"深色"),
+        localized(L"Clair", L"Light", L"Hell", L"浅色")
+    };
+    for (int index = 0; index < 2; ++index) {
+        const bool selected = static_cast<int>(g_appTheme) == index;
+        RectF option(themeAreaX + index * (themeWidth + themeGap), appearanceCard.Y + 35, themeWidth, 78);
+        fillRound(graphics, option, 14,
+                  selected ? (lightTheme() ? Color(255, 241, 238, 255) : Color(255, 45, 38, 72))
+                           : Color(255, 22, 26, 37));
+        strokeRound(graphics, option, 14, selected ? accentColor() : Color(255, 43, 49, 65), selected ? 1.6f : 1.0f);
+        const float iconX = option.X + 30.0f;
+        const float iconY = option.Y + option.Height / 2.0f;
+        const Color iconColor = selected ? accentColor() : secondaryTextColor();
+        if (index == 0) {
+            SolidBrush moon(iconColor);
+            graphics.FillEllipse(&moon, RectF(iconX - 9, iconY - 9, 18, 18));
+            SolidBrush cutout(lightTheme() ? Color(255, 241, 238, 255) : Color(255, 45, 38, 72));
+            if (!selected) cutout.SetColor(themeNeutralSurface(Color(255, 22, 26, 37)));
+            graphics.FillEllipse(&cutout, RectF(iconX - 3, iconY - 11, 17, 17));
+        } else {
+            SolidBrush sun(iconColor);
+            Pen rays(iconColor, 1.5f);
+            graphics.FillEllipse(&sun, RectF(iconX - 5, iconY - 5, 10, 10));
+            constexpr float themePi = 3.14159265358979323846f;
+            for (int ray = 0; ray < 8; ++ray) {
+                const float angle = ray * themePi / 4.0f;
+                graphics.DrawLine(&rays, iconX + std::cos(angle) * 8.0f, iconY + std::sin(angle) * 8.0f,
+                                  iconX + std::cos(angle) * 11.0f, iconY + std::sin(angle) * 11.0f);
+            }
+        }
+        text(graphics, themeNames[index], RectF(option.X + 52, option.Y, option.Width - 62, option.Height), 11,
+             selected ? primaryTextColor() : secondaryTextColor(), selected ? FontStyleBold : FontStyleRegular,
+             StringAlignmentNear, StringAlignmentCenter);
+        addHit(option, Action::SelectTheme, index);
+    }
+
+    y = appearanceCard.GetBottom() + 18;
     RectF languageCard(x, y, available, 174);
     fillRound(graphics, languageCard, 18, Color(255, 28, 32, 45));
     strokeRound(graphics, languageCard, 18, Color(255, 39, 45, 61));
@@ -7041,13 +7220,15 @@ void drawSettings(Graphics& graphics, int width, int height, float originY) {
     for (int index = 0; index < 4; ++index) {
         const bool selected = index == static_cast<int>(g_language);
         RectF option(languageCard.X + 20 + index * (optionWidth + optionGap), languageCard.Y + 76, optionWidth, 76);
-        fillRound(graphics, option, 13, selected ? Color(255, 45, 38, 72) : Color(255, 22, 26, 37));
+        fillRound(graphics, option, 13,
+                  selected ? (lightTheme() ? Color(255, 241, 238, 255) : Color(255, 45, 38, 72))
+                           : Color(255, 22, 26, 37));
         strokeRound(graphics, option, 13, selected ? accentColor() : Color(255, 43, 49, 65), selected ? 1.5f : 1.0f);
         fillRound(graphics, RectF(option.X + 12, option.Y + 17, 38, 38), 11, selected ? accentColor() : Color(255, 34, 40, 55));
         text(graphics, codes[index], RectF(option.X + 12, option.Y + 17, 38, 38), index == 3 ? 10 : 11,
              Color::White, FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
         text(graphics, names[index], RectF(option.X + 61, option.Y + 17, option.Width - 72, 38), 12,
-             selected ? Color::White : Color(255, 196, 202, 216), selected ? FontStyleBold : FontStyleRegular,
+             selected ? primaryTextColor() : Color(255, 196, 202, 216), selected ? FontStyleBold : FontStyleRegular,
              StringAlignmentNear, StringAlignmentCenter);
         addHit(option, Action::SelectLanguage, index);
     }
@@ -7440,11 +7621,15 @@ void drawFastGlow(Graphics& graphics, const RectF& bounds, Color color) {
 
 void renderAnimatedBackgroundFrame(Graphics& graphics, int width, int height) {
     LinearGradientBrush base(PointF(0, 0), PointF(static_cast<REAL>(width), static_cast<REAL>(height)),
-                             Color(255, 7, 9, 15), Color(255, 12, 15, 24));
+                             lightTheme() ? Color(255, 250, 251, 254) : Color(255, 20, 22, 27),
+                             lightTheme() ? Color(255, 239, 243, 250) : Color(255, 31, 34, 41));
     constexpr INT stopCount = 5;
     Color colors[stopCount] = {
-        Color(255, 7, 9, 15), Color(255, 10, 13, 22), Color(255, 12, 15, 25),
-        Color(255, 9, 13, 22), Color(255, 6, 8, 14)
+        lightTheme() ? Color(255, 250, 251, 254) : Color(255, 20, 22, 27),
+        lightTheme() ? Color(255, 247, 249, 253) : Color(255, 25, 28, 34),
+        lightTheme() ? Color(255, 242, 246, 252) : Color(255, 31, 34, 41),
+        lightTheme() ? Color(255, 248, 246, 252) : Color(255, 27, 30, 36),
+        lightTheme() ? Color(255, 250, 251, 254) : Color(255, 19, 21, 26)
     };
     REAL positions[stopCount] = {0.0f, 0.28f, 0.54f, 0.78f, 1.0f};
     base.SetInterpolationColors(colors, positions, stopCount);
@@ -7453,12 +7638,14 @@ void renderAnimatedBackgroundFrame(Graphics& graphics, int width, int height) {
     // Two wide auroras replace the old grid and large competing colour blobs.
     // They preserve the RGB identity while leaving the controls visually quiet.
     const float accentX = width * 0.72f;
-    drawFastGlow(graphics, RectF(accentX - 390.0f, -250.0f, 780.0f, 520.0f), accentColor(27));
+    drawFastGlow(graphics, RectF(accentX - 390.0f, -250.0f, 780.0f, 520.0f),
+                 accentColor(lightTheme() ? 18 : 27));
     const float cyanX = width * 0.34f;
     const float cyanY = height * 0.96f;
-    drawFastGlow(graphics, RectF(cyanX - 340.0f, cyanY - 220.0f, 680.0f, 440.0f), Color(19, 27, 203, 190));
+    drawFastGlow(graphics, RectF(cyanX - 340.0f, cyanY - 220.0f, 680.0f, 440.0f),
+                 lightTheme() ? Color(20, 95, 208, 241) : Color(19, 27, 203, 190));
 
-    SolidBrush constellation(Color(22, 151, 167, 202));
+    SolidBrush constellation(lightTheme() ? Color(24, 92, 107, 139) : Color(22, 151, 167, 202));
     for (float y = 126.0f; y < height; y += 118.0f) {
         for (float x = static_cast<float>(kSidebarWidth + 52); x < width; x += 142.0f) {
             graphics.FillEllipse(&constellation, RectF(x, y, 1.4f, 1.4f));
@@ -7475,7 +7662,8 @@ void drawBackgroundMotion(Graphics& graphics, int width, int height) {
         const float x = static_cast<float>(std::fmod(index * 173.0 + phase * speed + width * 2.0, std::max(1, width)));
         const float y = static_cast<float>(std::fmod(index * 127.0 + 14.0 * std::sin(phase * 0.18 + index), std::max(1, height)));
         const float radius = 0.65f + (index % 3) * 0.32f;
-        SolidBrush particle(index % 3 == 0 ? accentColor(36) : Color(22, 190, 207, 235));
+        SolidBrush particle(index % 3 == 0 ? accentColor(lightTheme() ? 25 : 36)
+                                           : (lightTheme() ? Color(20, 88, 112, 154) : Color(22, 190, 207, 235)));
         graphics.FillEllipse(&particle, RectF(x, y, radius * 2, radius * 2));
     }
 }
@@ -8258,6 +8446,10 @@ int createInterfaceCaptures(const fs::path& destination) {
     ok = saveLaunchCapture(1180, 760, destination / L"launch-reveal.png", 2820.0) && ok;
     ok = savePageCapture(Page::Dashboard, 1180, 760, destination / L"dashboard.png") && ok;
     ok = savePageCapture(Page::Devices, 1180, 760, destination / L"devices.png") && ok;
+    g_appTheme = AppTheme::Light;
+    ok = savePageCapture(Page::Dashboard, 1180, 760, destination / L"dashboard-light.png") && ok;
+    ok = savePageCapture(Page::Settings, 1180, 760, destination / L"settings-light.png") && ok;
+    g_appTheme = AppTheme::Dark;
     RgbDevice dualSenseCapture;
     dualSenseCapture.index = 2;
     dualSenseCapture.name = L"Sony DualSense Wireless Controller";
@@ -8620,6 +8812,9 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
         case Action::Refresh: startScan(true); break;
         case Action::HeaderStatus: g_page = Page::Diagnostics; g_scrollOffset = 0; break;
         case Action::HeaderUpdate: g_page = Page::Settings; g_scrollOffset = 0; break;
+        case Action::ToggleTheme:
+            selectAppTheme(lightTheme() ? AppTheme::Dark : AppTheme::Light);
+            break;
         case Action::DeviceOpenEffects: g_page = Page::Effects; g_scrollOffset = 0; break;
         case Action::DeviceOpenFans: g_page = Page::Fans; g_scrollOffset = 0; break;
         case Action::DeviceOpenDiagnostics: g_page = Page::Diagnostics; g_scrollOffset = 0; break;
@@ -8860,6 +9055,9 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             g_reduceMotion = !g_reduceMotion;
             saveAutomationSettings();
             break;
+        case Action::SelectTheme:
+            if (hit.index >= 0 && hit.index <= 1) selectAppTheme(static_cast<AppTheme>(hit.index));
+            break;
         case Action::SelectAccent:
             if (hit.index >= 0 && hit.index < static_cast<int>(std::size(kAccentChoices))) {
                 g_accentPreset = hit.index;
@@ -8882,6 +9080,7 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             }
             break;
         case Action::ResetPreferences:
+            g_appTheme = AppTheme::Dark;
             g_accentPreset = 0;
             g_detectionIntervalSeconds = 5;
             g_effectQuality = 1;
@@ -8891,6 +9090,8 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             g_rememberLastPage = true;
             g_reduceMotion = false;
             g_dualSensePlayerLedsEnabled = true;
+            g_gamepadPageCache.reset();
+            applyWindowChromeTheme();
             saveAutomationSettings();
             break;
         case Action::ScheduleToggle:
@@ -9447,6 +9648,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             }
             for (auto iterator = g_hits.rbegin(); iterator != g_hits.rend(); ++iterator) {
                 bool headerAction = iterator->action == Action::HeaderStatus || iterator->action == Action::HeaderUpdate ||
+                                    iterator->action == Action::ToggleTheme ||
                                     iterator->action == Action::Minimize || iterator->action == Action::Maximize || iterator->action == Action::Close;
                 bool navigationAction = iterator->action == Action::NavDashboard || iterator->action == Action::NavDevices || iterator->action == Action::NavGamepads || iterator->action == Action::NavEffects ||
                                         iterator->action == Action::NavProfiles || iterator->action == Action::NavFans ||
@@ -9560,6 +9762,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             const bool updateReady = !g_downloadedUpdate.empty();
             const float controlsLeft = static_cast<float>(client.right - 164);
             const float interactiveLeft = controlsLeft - 12.0f - 268.0f - (updateReady ? 54.0f : 0.0f);
+            if (point.y >= 16 && point.y <= 52 && point.x >= 188 && point.x <= 224) return HTCLIENT;
             if (point.y < kHeaderHeight && point.x < static_cast<int>(interactiveLeft - 8.0f)) return HTCAPTION;
             return HTCLIENT;
         }
@@ -9800,12 +10003,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int showCommand) {
                                WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU,
                                CW_USEDEFAULT, CW_USEDEFAULT, 1180, 760, nullptr, nullptr, instance, nullptr);
     if (!g_window) return 2;
-    BOOL dark = TRUE;
-    DwmSetWindowAttribute(g_window, 20, &dark, sizeof(dark));
+    applyWindowChromeTheme();
     int corner = 2;
     DwmSetWindowAttribute(g_window, 33, &corner, sizeof(corner));
-    COLORREF border = RGB(49, 55, 72);
-    DwmSetWindowAttribute(g_window, 34, &border, sizeof(border));
     if (g_xboxModeEnabled) startXboxBridge();
     if (!g_startHidden) {
         ShowWindow(g_window, showCommand);

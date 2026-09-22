@@ -1,5 +1,23 @@
-RGBCcontrol 0.17.0 — application native C++ pour Windows
+RGBCcontrol 0.18.0 — application native C++ pour Windows
 =====================================================
+
+Pilote automatique 0.18.0
+--------------------------
+Le nouvel onglet Pilote auto regroupe les profils par application, la
+protection thermique, la planification jour/nuit et la priorité manette. Ces
+règles peuvent être activées ensemble ou séparément et continuent à fonctionner
+quand la fenêtre est réduite.
+
+Un centre de santé signale les moteurs RGB concurrents, les températures
+critiques, les pilotes rejetés et l'absence de contrôleurs. Les événements
+importants et les mises à jour disponibles peuvent apparaître sous forme de
+notifications Windows locales.
+
+Le plan visuel du setup permet de déplacer les contrôleurs par glisser-déposer.
+La position est mémorisée et détermine l'ordre physique des appareils pour les
+vagues et les dégradés. Le moteur OpenRGB calcule désormais une animation
+continue sur l'ensemble des appareils sélectionnés au lieu de recommencer la
+couleur au début de chaque contrôleur.
 
 Nouvelle interface 0.17.0
 -------------------------

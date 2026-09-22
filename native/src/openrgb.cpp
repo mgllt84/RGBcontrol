@@ -480,6 +480,21 @@ void OpenRgbClient::sendEffectFrame(const std::vector<RgbDevice>& devices,
             sendPacket(socket.value, 0, 50, clientBytes);
         }
         const std::wstring key = lower(mode);
+        auto frameColorCount = [](const RgbDevice& device) {
+            int zoneTotal = 0;
+            for (const RgbZone& zone : device.zoneDetails) {
+                int count = static_cast<int>(std::min<std::uint32_t>(zone.leds, 4096));
+                if ((zone.flags & 0x1u) != 0 && count > 0) count = 1;
+                zoneTotal += count;
+            }
+            return device.zoneDetails.size() > 1 && zoneTotal > 0 ? zoneTotal : std::clamp(device.leds, 1, 4096);
+        };
+        int globalColorTotal = 0;
+        for (const RgbDevice& device : devices) {
+            if (device.selected) globalColorTotal += frameColorCount(device);
+        }
+        globalColorTotal = std::max(1, globalColorTotal);
+        int deviceFirstColor = 0;
         for (const RgbDevice& device : devices) {
         if (!device.selected) continue;
         auto makeColors = [&](int count, int first, int total) {
@@ -558,14 +573,16 @@ void OpenRgbClient::sendEffectFrame(const std::vector<RgbDevice>& devices,
                 const int count = zoneCounts[zone];
                 if (count <= 0) continue;
                 sendPacket(socket.value, static_cast<std::uint32_t>(device.index), 1051,
-                           zoneColorPacket(static_cast<std::uint32_t>(zone), makeColors(count, first, totalZoneColors), device.colorOrder));
+                           zoneColorPacket(static_cast<std::uint32_t>(zone),
+                                           makeColors(count, deviceFirstColor + first, globalColorTotal), device.colorOrder));
                 first += count;
             }
         } else {
             const int count = std::clamp(device.leds, 1, 4096);
             sendPacket(socket.value, static_cast<std::uint32_t>(device.index), 1050,
-                       colorPacket(makeColors(count, 0, count), device.colorOrder));
+                       colorPacket(makeColors(count, deviceFirstColor, globalColorTotal), device.colorOrder));
         }
+        deviceFirstColor += frameColorCount(device);
         }
     } catch (...) {
         socket.reset();

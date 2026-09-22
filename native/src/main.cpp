@@ -71,9 +71,9 @@ constexpr int HOTKEY_UNDO = 5111;
 constexpr UINT WM_WTSSESSION_CHANGE_MESSAGE = 0x02B1;
 constexpr WPARAM WTS_SESSION_LOCK_VALUE = 0x7;
 constexpr WPARAM WTS_SESSION_UNLOCK_VALUE = 0x8;
-constexpr int kHeaderHeight = 68;
-constexpr int kSidebarWidth = 204;
-constexpr wchar_t kAppVersion[] = L"0.16.24";
+constexpr int kHeaderHeight = 76;
+constexpr int kSidebarWidth = 188;
+constexpr wchar_t kAppVersion[] = L"0.17.0";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -2030,9 +2030,9 @@ void roundedPath(GraphicsPath& path, const RectF& rect, float radius) {
 void fillRound(Graphics& graphics, const RectF& rect, float radius, Color color) {
     GraphicsPath path;
     roundedPath(path, rect, radius);
-    // Aurora Studio design system. The legacy pages deliberately keep using a
-    // small set of surface colours; translating them here gives every screen
-    // the same calm hierarchy without duplicating visual code in each page.
+    // Control Deck design system. Legacy pages intentionally keep using a
+    // compact surface palette; translating it here gives the whole application
+    // the same new visual hierarchy without duplicating theme code per page.
     const bool primarySurface = color.GetA() == 255 && color.GetR() == 28 &&
                                 color.GetG() == 32 && color.GetB() == 45;
     const bool secondarySurface = color.GetA() == 255 &&
@@ -2041,18 +2041,18 @@ void fillRound(Graphics& graphics, const RectF& rect, float radius, Color color)
          (color.GetR() == 22 && color.GetG() == 26 && color.GetB() == 37));
     if (primarySurface || secondarySurface) {
         GraphicsPath shadowPath;
-        roundedPath(shadowPath, RectF(rect.X, rect.Y + (lightTheme() ? 4.0f : 7.0f), rect.Width, rect.Height), radius);
-        SolidBrush shadow(lightTheme() ? Color(primarySurface ? 25 : 17, 37, 52, 78)
-                                       : Color(primarySurface ? 66 : 42, 0, 0, 0));
+        roundedPath(shadowPath, RectF(rect.X, rect.Y + (lightTheme() ? 3.0f : 5.0f), rect.Width, rect.Height), radius);
+        SolidBrush shadow(lightTheme() ? Color(primarySurface ? 24 : 14, 37, 52, 78)
+                                       : Color(primarySurface ? 72 : 40, 0, 0, 0));
         graphics.FillPath(&shadow, &shadowPath);
         LinearGradientBrush glass(PointF(rect.X, rect.Y), PointF(rect.X, rect.GetBottom()),
-                                  lightTheme() ? (primarySurface ? Color(255, 255, 255, 255) : Color(255, 250, 251, 254))
-                                               : (primarySurface ? Color(250, 27, 32, 46) : Color(248, 22, 26, 38)),
-                                  lightTheme() ? (primarySurface ? Color(255, 248, 250, 253) : Color(255, 244, 247, 252))
-                                               : (primarySurface ? Color(250, 18, 22, 33) : Color(248, 15, 19, 29)));
+                                  lightTheme() ? (primarySurface ? Color(255, 255, 255, 255) : Color(255, 247, 249, 253))
+                                               : (primarySurface ? Color(252, 35, 39, 49) : Color(250, 29, 33, 42)),
+                                  lightTheme() ? (primarySurface ? Color(255, 250, 251, 254) : Color(255, 241, 245, 251))
+                                               : (primarySurface ? Color(252, 27, 30, 39) : Color(250, 23, 26, 34)));
         graphics.FillPath(&glass, &path);
-        Pen topLight(lightTheme() ? Color(255, 218, 224, 235)
-                                  : (primarySurface ? Color(28, 255, 255, 255) : Color(18, 255, 255, 255)), 1.0f);
+        Pen topLight(lightTheme() ? Color(255, 221, 227, 238)
+                                  : (primarySurface ? Color(35, 255, 255, 255) : Color(22, 255, 255, 255)), 1.0f);
         graphics.DrawPath(&topLight, &path);
         return;
     }
@@ -4427,14 +4427,14 @@ void drawBaseLogoRound(Graphics& graphics, const RectF& destination, double opac
 
 void drawHeader(Graphics& graphics, int width) {
     LinearGradientBrush header(PointF(0, 0), PointF(static_cast<REAL>(width), static_cast<REAL>(kHeaderHeight)),
-                               lightTheme() ? Color(255, 255, 255, 255) : Color(250, 24, 26, 32),
-                               lightTheme() ? Color(255, 247, 249, 253) : Color(250, 31, 34, 41));
+                               lightTheme() ? Color(255, 255, 255, 255) : Color(252, 15, 17, 22),
+                               lightTheme() ? Color(255, 246, 249, 253) : Color(252, 21, 24, 31));
     graphics.FillRectangle(&header, 0, 0, width, kHeaderHeight);
     Pen line(lightTheme() ? Color(255, 218, 224, 235) : Color(178, 54, 59, 70));
     graphics.DrawLine(&line, 0, kHeaderHeight - 1, width, kHeaderHeight - 1);
     SolidBrush logoGlow(accentColor(26));
-    graphics.FillEllipse(&logoGlow, RectF(14, 8, 50, 50));
-    const RectF logoBounds(20, 14, 38, 38);
+    graphics.FillEllipse(&logoGlow, RectF(14, 12, 50, 50));
+    const RectF logoBounds(20, 18, 38, 38);
     if (g_logo && g_logo->GetLastStatus() == Ok) {
         static Bitmap* roundLogo = nullptr;
         if (!roundLogo) {
@@ -4455,13 +4455,13 @@ void drawHeader(Graphics& graphics, int width) {
     Pen logoRing(accentTint(0.24), 1.3f);
     graphics.DrawEllipse(&logoRing, logoBounds);
     Pen logoHighlight(Color(88, 255, 255, 255), 1.0f);
-    graphics.DrawArc(&logoHighlight, RectF(22, 16, 34, 34), 205.0f, 105.0f);
-    text(graphics, L"RGBCcontrol", RectF(70, 11, 116, 25), 17, primaryTextColor(), FontStyleBold,
+    graphics.DrawArc(&logoHighlight, RectF(22, 20, 34, 34), 205.0f, 105.0f);
+    text(graphics, L"RGBCcontrol", RectF(70, 15, 116, 25), 17, primaryTextColor(), FontStyleBold,
          StringAlignmentNear, StringAlignmentCenter);
-    text(graphics, L"CONTROL STUDIO", RectF(71, 36, 145, 15), 8, accentTint(0.38), FontStyleBold,
+    text(graphics, L"CONTROL DECK", RectF(71, 40, 112, 15), 8, accentTint(0.38), FontStyleBold,
          StringAlignmentNear, StringAlignmentCenter);
 
-    const RectF themeToggle(188, 16, 36, 36);
+    const RectF themeToggle(196, 20, 36, 36);
     const bool themeHovered = g_hoverAction == Action::ToggleTheme;
     fillRound(graphics, themeToggle, 11,
               lightTheme() ? Color(255, 255, 248, 228)
@@ -4484,14 +4484,14 @@ void drawHeader(Graphics& graphics, int width) {
     }
     addHit(themeToggle, Action::ToggleTheme);
 
-    RectF controls(static_cast<float>(width - 164), 12, 148, 44);
-    fillRound(graphics, controls, 13, Color(228, 18, 22, 33));
+    RectF controls(static_cast<float>(width - 164), 16, 148, 44);
+    fillRound(graphics, controls, 14, lightTheme() ? Color(255, 241, 244, 249) : Color(238, 20, 23, 30));
     strokeRound(graphics, controls, 13, Color(255, 39, 46, 63));
 
     const bool updateReady = g_updateAvailable || !g_downloadedUpdate.empty();
     constexpr float statusWidth = 268.0f;
     const float statusRight = controls.X - 12.0f - (updateReady ? 54.0f : 0.0f);
-    RectF statusPill(statusRight - statusWidth, 16, statusWidth, 36);
+    RectF statusPill(statusRight - statusWidth, 20, statusWidth, 36);
     const HeaderHealth health = currentHeaderHealth();
     const int healthState = static_cast<int>(health);
     const ULONGLONG now = GetTickCount64();
@@ -4554,9 +4554,9 @@ void drawHeader(Graphics& graphics, int width) {
 
     if (updateReady) {
         const bool installerReady = !g_downloadedUpdate.empty();
-        const float notificationX = 236.0f;
-        const float notificationWidth = std::clamp(static_cast<float>(width) - 790.0f, 180.0f, 250.0f);
-        RectF notification(notificationX, 16, notificationWidth, 36);
+        const float notificationX = 246.0f;
+        const float notificationWidth = std::clamp(static_cast<float>(width) - 804.0f, 180.0f, 250.0f);
+        RectF notification(notificationX, 20, notificationWidth, 36);
         const float notificationHover = activeHoverProgress(Action::HeaderUpdate);
         const Color notificationBackground = lightTheme()
             ? Color(255, 255, 244, 218)
@@ -4589,7 +4589,7 @@ void drawHeader(Graphics& graphics, int width) {
     }
 
     if (updateReady) {
-        RectF updatePill(controls.X - 58, 16, 46, 36);
+        RectF updatePill(controls.X - 58, 20, 46, 36);
         const float updateHover = activeHoverProgress(Action::HeaderUpdate);
         fillRound(graphics, updatePill, 12, Color(255, 35, 38, 54));
         fillRound(graphics, updatePill, 12, accentColor(updateHover > 0 ? 210 : 72));
@@ -4805,13 +4805,14 @@ void drawNavigationIcon(Graphics& graphics, int iconIndex, const RectF& bounds, 
 
 void drawNavigation(Graphics& graphics, int height) {
     LinearGradientBrush sidebar(PointF(0, static_cast<REAL>(kHeaderHeight)), PointF(static_cast<REAL>(kSidebarWidth), static_cast<REAL>(height)),
-                                lightTheme() ? Color(255, 250, 251, 254) : Color(255, 27, 29, 35),
-                                lightTheme() ? Color(255, 244, 247, 252) : Color(255, 32, 35, 42));
+                                lightTheme() ? Color(255, 250, 251, 254) : Color(255, 17, 19, 25),
+                                lightTheme() ? Color(255, 242, 246, 252) : Color(255, 22, 25, 32));
     graphics.FillRectangle(&sidebar, 0, kHeaderHeight, kSidebarWidth, height - kHeaderHeight);
-    Pen line(lightTheme() ? Color(255, 218, 224, 235) : Color(188, 57, 62, 73));
+    Pen line(lightTheme() ? Color(255, 221, 226, 236) : Color(180, 47, 52, 64));
     graphics.DrawLine(&line, kSidebarWidth - 1, kHeaderHeight, kSidebarWidth - 1, height);
-    text(graphics, localized(L"NAVIGATION", L"NAVIGATION", L"NAVIGATION", L"导航"), RectF(20, 91, 150, 18), 9,
-         Color(255, 101, 112, 136), FontStyleBold);
+    text(graphics, localized(L"CENTRE DE CONTRÔLE", L"CONTROL CENTER", L"STEUERZENTRALE", L"控制中心"),
+         RectF(18, static_cast<float>(kHeaderHeight + 20), kSidebarWidth - 36.0f, 18), 8,
+         Color(255, 105, 116, 140), FontStyleBold);
     struct Nav { const wchar_t* label; Page page; Action action; } navs[] = {
         {localized(L"Tableau de bord", L"Dashboard", L"Übersicht", L"控制面板"), Page::Dashboard, Action::NavDashboard},
         {localized(L"Appareils", L"Devices", L"Geräte", L"设备"), Page::Devices, Action::NavDevices},
@@ -4822,45 +4823,46 @@ void drawNavigation(Graphics& graphics, int height) {
         {localized(L"Diagnostic", L"Diagnostics", L"Diagnose", L"诊断"), Page::Diagnostics, Action::NavDiagnostics},
         {localized(L"Paramètres", L"Settings", L"Einstellungen", L"设置"), Page::Settings, Action::NavSettings}
     };
-    float y = 118;
+    float y = static_cast<float>(kHeaderHeight + 49);
     int navIndex = 0;
     for (const Nav& nav : navs) {
-        RectF rect(12, y, static_cast<float>(kSidebarWidth - 24), 44);
+        RectF rect(12, y, static_cast<float>(kSidebarWidth - 24), 46);
         const bool active = g_page == nav.page ||
                             (nav.page == Page::Devices && (g_page == Page::DuckyAssistant || g_page == Page::Compatibility));
         const bool hovered = g_hoverAction == nav.action;
         if (active) {
             GraphicsPath activePath;
-            roundedPath(activePath, rect, 12);
-            LinearGradientBrush activeBrush(PointF(rect.X, rect.Y), PointF(rect.GetRight(), rect.GetBottom()),
-                                            accentColor(52), accentColor(22));
+            roundedPath(activePath, rect, 14);
+            LinearGradientBrush activeBrush(PointF(rect.X, rect.Y), PointF(rect.GetRight(), rect.Y),
+                                            accentColor(224), accentTint(0.18, 224));
             graphics.FillPath(&activeBrush, &activePath);
-            strokeRound(graphics, rect, 12, accentColor(98), 1.0f);
-            fillRound(graphics, RectF(rect.X + 3, rect.Y + 11, 3, rect.Height - 22), 2, accentTint(0.44));
+            strokeRound(graphics, rect, 14, accentTint(0.38), 1.0f);
         } else if (hovered) {
-            fillRound(graphics, rect, 12, Color(178, 28, 34, 48));
+            fillRound(graphics, rect, 14, lightTheme() ? Color(255, 234, 239, 248) : Color(230, 32, 36, 46));
         }
-        RectF icon(rect.X + 12, rect.Y + 8, 28, 28);
-        fillRound(graphics, icon, 9, active ? accentColor(66) : Color(255, 25, 30, 43));
-        strokeRound(graphics, icon, 9, active ? accentColor(112) : Color(255, 42, 49, 67));
+        RectF icon(rect.X + 11, rect.Y + 8, 30, 30);
+        if (!active) {
+            fillRound(graphics, icon, 10, lightTheme() ? Color(255, 238, 242, 249) : Color(255, 27, 31, 40));
+            strokeRound(graphics, icon, 10, lightTheme() ? Color(255, 216, 222, 234) : Color(255, 44, 50, 64));
+        }
         drawNavigationIcon(graphics, navIndex, icon,
-                           active ? accentTint(0.62) : Color(255, 135, 146, 170));
-        text(graphics, nav.label, RectF(rect.X + 51, rect.Y, rect.Width - 59, rect.Height), 12,
-             active ? Color(255, 242, 239, 252) : Color(255, 163, 172, 193),
+                           active ? accentButtonText() : Color(255, 145, 156, 181));
+        text(graphics, nav.label, RectF(rect.X + 50, rect.Y, rect.Width - 58, rect.Height), 11,
+             active ? accentButtonText() : Color(255, 168, 177, 198),
              active ? FontStyleBold : FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
         addHit(rect, nav.action);
-        y += 52;
+        y += 53;
         ++navIndex;
     }
-    RectF donate(16, static_cast<float>(height - 126), static_cast<float>(kSidebarWidth - 32), 40);
-    fillRound(graphics, donate, 11, Color(255, 31, 24, 36));
-    strokeRound(graphics, donate, 11, Color(255, 78, 48, 70));
+    RectF donate(14, static_cast<float>(height - 126), static_cast<float>(kSidebarWidth - 28), 40);
+    fillRound(graphics, donate, 12, lightTheme() ? Color(255, 248, 238, 246) : Color(255, 31, 27, 36));
+    strokeRound(graphics, donate, 12, lightTheme() ? Color(255, 229, 197, 219) : Color(255, 74, 50, 69));
     text(graphics, localized(L"Soutenir le projet", L"Support the project", L"Projekt unterstützen", L"支持项目"), donate,
          11, Color(255, 237, 194, 215), FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
     addHit(donate, Action::Donate);
-    RectF safe(16, static_cast<float>(height - 74), static_cast<float>(kSidebarWidth - 32), 52);
-    fillRound(graphics, safe, 12, Color(255, 14, 34, 30));
-    strokeRound(graphics, safe, 12, Color(255, 27, 69, 58));
+    RectF safe(14, static_cast<float>(height - 74), static_cast<float>(kSidebarWidth - 28), 52);
+    fillRound(graphics, safe, 13, lightTheme() ? Color(255, 231, 249, 242) : Color(255, 14, 36, 31));
+    strokeRound(graphics, safe, 13, lightTheme() ? Color(255, 182, 228, 209) : Color(255, 28, 72, 60));
     SolidBrush dot(Color(255, 85, 217, 162));
     graphics.FillEllipse(&dot, RectF(safe.X + 13.0f, safe.Y + 13.0f, 7.0f, 7.0f));
     text(graphics, localized(L"CONTRÔLE LOCAL", L"LOCAL CONTROL", L"LOKALE STEUERUNG", L"本地控制"),
@@ -4871,136 +4873,245 @@ void drawNavigation(Graphics& graphics, int height) {
 
 void drawPageIntro(Graphics& graphics, float x, float y, float titleWidth,
                    const std::wstring& eyebrow, const std::wstring& title) {
-    fillRound(graphics, RectF(x, y + 2.0f, 3.0f, 14.0f), 2.0f, accentColor());
-    text(graphics, eyebrow, RectF(x + 13.0f, y, std::max(0.0f, titleWidth - 13.0f), 18.0f),
-         9, accentTint(0.42), FontStyleBold);
-    text(graphics, title, RectF(x, y + 22.0f, titleWidth, 38.0f), 27,
+    const float eyebrowWidth = std::clamp(static_cast<float>(eyebrow.size()) * 7.0f + 28.0f, 78.0f, 176.0f);
+    RectF eyebrowBadge(x, y, eyebrowWidth, 24.0f);
+    fillRound(graphics, eyebrowBadge, 12.0f, accentColor(lightTheme() ? 24 : 34));
+    strokeRound(graphics, eyebrowBadge, 12.0f, accentColor(lightTheme() ? 60 : 74));
+    SolidBrush dot(accentColor());
+    graphics.FillEllipse(&dot, RectF(eyebrowBadge.X + 10.0f, eyebrowBadge.Y + 9.0f, 6.0f, 6.0f));
+    text(graphics, eyebrow, RectF(x + 23.0f, y, eyebrowWidth - 29.0f, 24.0f),
+         8, accentTint(0.42), FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
+    text(graphics, title, RectF(x, y + 31.0f, titleWidth, 40.0f), 29,
          Color(255, 244, 246, 251), FontStyleBold);
 }
 
 void drawDashboard(Graphics& graphics, int width, int height, float originY) {
-    float x = kSidebarWidth + 32.0f;
-    float available = width - x - 32.0f;
-    drawPageIntro(graphics, x, originY, 580,
-                  localized(L"ACCUEIL", L"HOME", L"START", L"主页"),
-                  localized(L"Ton setup, simplement.", L"Your setup, made simple.", L"Dein Setup, ganz einfach.", L"轻松掌控整套设备。"));
-    drawButton(graphics, RectF(width - 164.0f, originY + 10, 126, 40), localized(L"Actualiser", L"Refresh", L"Aktualisieren", L"刷新"), false, Action::Refresh);
-    const float quickHeight = g_compactDashboard ? 52.0f : 68.0f;
-    RectF quickCard(x, originY + 78, available, quickHeight);
-    fillRound(graphics, quickCard, 16, Color(255, 23, 27, 39));
-    strokeRound(graphics, quickCard, 16, Color(255, 43, 49, 65));
-    const float quickLabelWidth = g_compactDashboard ? 92.0f : 126.0f;
-    text(graphics, localized(L"ACCÈS RAPIDE", L"QUICK ACCESS", L"SCHNELLZUGRIFF", L"快速操作"),
-         RectF(quickCard.X + 16, quickCard.Y, quickLabelWidth - 22, quickCard.Height), 9,
-         accentTint(0.42), FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
-    const float quickX = quickCard.X + quickLabelWidth;
-    const float quickGap = 7.0f;
-    const float quickWidth = (quickCard.GetRight() - quickX - 16.0f - quickGap * 4.0f) / 5.0f;
-    const float quickY = quickCard.Y + (quickCard.Height - 38.0f) / 2.0f;
+    const float x = kSidebarWidth + 28.0f;
+    const float available = width - x - 28.0f;
+    const float gap = 16.0f;
+    const float heroHeight = g_compactDashboard ? 136.0f : 154.0f;
+    const float heroWidth = available * 0.62f;
+    const int totalDevices = static_cast<int>(g_rgbDevices.size()) + (g_duckyDetected ? 1 : 0);
+    const int selectedDevices = static_cast<int>(std::count_if(g_rgbDevices.begin(), g_rgbDevices.end(),
+        [](const RgbDevice& device) { return device.selected; }));
+    const int controllableFans = static_cast<int>(std::count_if(g_fans.begin(), g_fans.end(),
+        [](const FanDevice& fan) { return fan.controllable; }));
+    const bool rgbEngineReady = g_openRgbReady || hasActivePluginDevice();
+
+    RectF hero(x, originY, heroWidth, heroHeight);
+    fillRound(graphics, hero, 22, Color(255, 28, 32, 45));
+    strokeRound(graphics, hero, 22, accentColor(lightTheme() ? 78 : 92), 1.2f);
+    GraphicsPath heroOverlayPath;
+    roundedPath(heroOverlayPath, hero, 22);
+    LinearGradientBrush heroOverlay(PointF(hero.X, hero.Y), PointF(hero.GetRight(), hero.GetBottom()),
+                                    accentColor(lightTheme() ? 24 : 42), Color(0, 0, 0, 0));
+    graphics.FillPath(&heroOverlay, &heroOverlayPath);
+    text(graphics, localized(L"CENTRE RGB", L"RGB CONTROL", L"RGB-ZENTRALE", L"RGB 控制中心"),
+         RectF(hero.X + 22, hero.Y + 17, 190, 18), 8, accentTint(0.48), FontStyleBold);
+    text(graphics, localized(L"Ton setup, sous contrôle.", L"Your setup, under control.",
+                             L"Dein Setup, unter Kontrolle.", L"轻松掌控整套设备。"),
+         RectF(hero.X + 22, hero.Y + 38, hero.Width - 160, 34), 25, primaryTextColor(), FontStyleBold);
+    text(graphics, localized(L"Éclairage, ventilation et périphériques réunis au même endroit.",
+                             L"Lighting, cooling and peripherals in one place.",
+                             L"Beleuchtung, Kühlung und Geräte an einem Ort.",
+                             L"灯光、散热与外设集中管理。"),
+         RectF(hero.X + 22, hero.Y + 72, hero.Width - 44, 20), 10, secondaryTextColor());
+    drawButton(graphics, RectF(hero.GetRight() - 116, hero.Y + 16, 96, 34),
+               localized(L"Actualiser", L"Refresh", L"Aktualisieren", L"刷新"), false, Action::Refresh);
+
+    const float metricY = hero.GetBottom() - 45.0f;
+    const float metricGap = 7.0f;
+    const float metricWidth = (hero.Width - 44.0f - metricGap * 2.0f) / 3.0f;
+    const std::wstring metricValues[] = {
+        std::to_wstring(totalDevices),
+        std::to_wstring(selectedDevices),
+        std::to_wstring(controllableFans)
+    };
+    const wchar_t* metricLabels[] = {
+        localized(L"détectés", L"detected", L"erkannt", L"已检测"),
+        localized(L"synchronisés", L"synced", L"synchronisiert", L"已同步"),
+        localized(L"ventilateurs", L"fans", L"Lüfter", L"风扇")
+    };
     for (int index = 0; index < 3; ++index) {
-        drawButton(graphics, RectF(quickX + index * (quickWidth + quickGap), quickY, quickWidth, 38),
+        RectF metric(hero.X + 22 + index * (metricWidth + metricGap), metricY, metricWidth, 30);
+        fillRound(graphics, metric, 10, lightTheme() ? Color(235, 255, 255, 255) : Color(190, 16, 19, 27));
+        text(graphics, metricValues[index], RectF(metric.X + 10, metric.Y, 28, metric.Height), 12,
+             primaryTextColor(), FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
+        text(graphics, metricLabels[index], RectF(metric.X + 37, metric.Y, metric.Width - 45, metric.Height), 8,
+             secondaryTextColor(), FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
+    }
+
+    RectF quick(hero.GetRight() + gap, originY, available - hero.Width - gap, heroHeight);
+    fillRound(graphics, quick, 22, Color(255, 28, 32, 45));
+    strokeRound(graphics, quick, 22, Color(255, 47, 53, 68));
+    text(graphics, localized(L"Actions rapides", L"Quick actions", L"Schnellaktionen", L"快捷操作"),
+         RectF(quick.X + 18, quick.Y + 15, quick.Width - 36, 22), 15, primaryTextColor(), FontStyleBold);
+    text(graphics, localized(L"Tes profils favoris", L"Your favorite profiles", L"Deine Favoriten", L"常用配置"),
+         RectF(quick.X + 18, quick.Y + 38, quick.Width - 36, 16), 9, secondaryTextColor());
+    const float profileGap = 6.0f;
+    const float profileWidth = (quick.Width - 36.0f - profileGap * 2.0f) / 3.0f;
+    for (int index = 0; index < 3; ++index) {
+        drawButton(graphics, RectF(quick.X + 18 + index * (profileWidth + profileGap), quick.Y + 60, profileWidth, 34),
                    profileName(index), g_activeProfile == index, Action::FavoriteProfile, index, g_profiles[index].saved);
     }
-    drawButton(graphics, RectF(quickX + 3 * (quickWidth + quickGap), quickY, quickWidth, 38),
-               g_quickLightsOff ? localized(L"Rallumer", L"Restore lights", L"Licht an", L"恢复灯光")
-                                : localized(L"Tout éteindre", L"All lights off", L"Alles aus", L"全部关闭"),
+    const float utilityWidth = (quick.Width - 42.0f) / 2.0f;
+    drawButton(graphics, RectF(quick.X + 18, quick.Y + 103, utilityWidth, 34),
+               g_quickLightsOff ? localized(L"Rallumer", L"Restore", L"Licht an", L"恢复灯光")
+                                : localized(L"Tout éteindre", L"Lights off", L"Alles aus", L"全部关闭"),
                g_quickLightsOff, Action::QuickLightsToggle);
-    drawButton(graphics, RectF(quickX + 4 * (quickWidth + quickGap), quickY, quickWidth, 38),
+    drawButton(graphics, RectF(quick.X + 24 + utilityWidth, quick.Y + 103, utilityWidth, 34),
                localized(L"Annuler", L"Undo", L"Rückgängig", L"撤销"), false,
                Action::UndoLastChange, -1, g_hasUndoProfile);
 
-    float y = quickCard.GetBottom() + 20.0f;
-    int totalDevices = static_cast<int>(g_rgbDevices.size()) + (g_duckyDetected ? 1 : 0);
-    text(graphics, std::wstring(localized(L"Appareils détectés  ", L"Devices found  ", L"Erkannte Geräte  ", L"已检测设备  ")) + std::to_wstring(totalDevices), RectF(x, y, 360, 22), 13, Color(255, 220, 224, 234), FontStyleBold);
-    text(graphics, g_status, RectF(width - 480.0f, y, 440, 22), 10,
-         lightTheme() ? Color(255, 42, 139, 108) : Color(255, 117, 205, 180),
+    float y = hero.GetBottom() + 22.0f;
+    text(graphics, localized(L"Tes appareils", L"Your devices", L"Deine Geräte", L"你的设备"),
+         RectF(x, y, 260, 24), 16, primaryTextColor(), FontStyleBold);
+    const std::wstring deviceSummary = std::to_wstring(totalDevices) +
+        localized(L" détecté(s)", L" detected", L" erkannt", L" 个已检测");
+    RectF countBadge(x + 126, y - 1, 88, 25);
+    fillRound(graphics, countBadge, 12, accentColor(lightTheme() ? 22 : 30));
+    text(graphics, deviceSummary, countBadge, 8, accentTint(0.42), FontStyleBold,
+         StringAlignmentCenter, StringAlignmentCenter);
+    text(graphics, g_status, RectF(width - 470.0f, y, 430, 22), 9,
+         rgbEngineReady ? (lightTheme() ? Color(255, 35, 139, 103) : Color(255, 108, 222, 177))
+                        : Color(255, 241, 180, 92),
          FontStyleRegular, StringAlignmentFar);
-    y += 34;
-    const float cardWidth = std::max(220.0f, (available - 24.0f) / 3.0f);
+    y += 34.0f;
+
+    const float cardGap = 12.0f;
+    const float cardWidth = std::max(210.0f, (available - cardGap * 2.0f) / 3.0f);
+    const float cardHeight = 112.0f;
     int column = 0;
     for (int index = 0; index < static_cast<int>(g_rgbDevices.size()); ++index) {
         const RgbDevice& device = g_rgbDevices[index];
         const std::wstring deviceType = localizedDeviceType(device.type);
-        float cardX = x + column * (cardWidth + 12);
-        RectF card(cardX, y, cardWidth, 106);
-        fillRound(graphics, card, 17, Color(255, 28, 32, 45));
-        strokeRound(graphics, card, 17, device.selected ? accentColor() : Color(255, 42, 48, 64));
-        fillRound(graphics, RectF(card.X + 16, card.Y + 17, 42, 42), 13, Color(255, 39, 61, 75));
-        text(graphics, deviceType.substr(0, std::min<std::size_t>(2, deviceType.size())), RectF(card.X + 16, card.Y + 17, 42, 42), 11,
-             Color(255, 105, 221, 199), FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
-        text(graphics, device.name, RectF(card.X + 70, card.Y + 16, card.Width - 86, 20), 13, Color(255, 237, 239, 246), FontStyleBold);
-        text(graphics, deviceType + L" · " + std::to_wstring(device.zones) + localized(L" zone(s)", L" zone(s)", L" Zone(n)", L" 个区域"), RectF(card.X + 70, card.Y + 40, card.Width - 86, 18), 10, Color(255, 135, 144, 165));
-        RectF selector(card.X + 16, card.Y + 70, card.Width - 32, 24);
-        fillRound(graphics, selector, 8, device.selected ? Color(255, 39, 42, 59) : Color(255, 34, 38, 52));
-        if (device.selected) fillRound(graphics, selector, 8, accentColor(34));
+        RectF card(x + column * (cardWidth + cardGap), y, cardWidth, cardHeight);
+        fillRound(graphics, card, 18, Color(255, 28, 32, 45));
+        strokeRound(graphics, card, 18, device.selected ? accentColor(190) : Color(255, 47, 53, 68),
+                    device.selected ? 1.4f : 1.0f);
+        RectF icon(card.X + 15, card.Y + 16, 42, 42);
+        fillRound(graphics, icon, 14, device.selected ? accentColor(42) : Color(255, 35, 44, 54));
+        text(graphics, deviceType.substr(0, std::min<std::size_t>(2, deviceType.size())), icon, 10,
+             device.selected ? accentTint(0.58) : Color(255, 139, 175, 183), FontStyleBold,
+             StringAlignmentCenter, StringAlignmentCenter);
+        SolidBrush stateDot(device.selected ? Color(255, 95, 226, 171) : Color(255, 108, 117, 139));
+        graphics.FillEllipse(&stateDot, RectF(card.GetRight() - 24, card.Y + 18, 7, 7));
+        text(graphics, device.name, RectF(card.X + 69, card.Y + 15, card.Width - 98, 22), 12,
+             primaryTextColor(), FontStyleBold);
+        text(graphics, deviceType + L" · " + std::to_wstring(device.zones) + localized(L" zone(s)", L" zone(s)", L" Zone(n)", L" 个区域"),
+             RectF(card.X + 69, card.Y + 39, card.Width - 88, 17), 9, secondaryTextColor());
+        RectF selector(card.X + 15, card.Y + 72, card.Width - 30, 25);
+        fillRound(graphics, selector, 9, device.selected ? accentColor(30) : Color(255, 31, 35, 45));
         text(graphics, device.selected
-                 ? localized(L"Inclus · cliquer pour exclure", L"Included · click to exclude", L"Aktiv · zum Ausschließen klicken", L"已包含 · 点击排除")
-                 : localized(L"Exclu · cliquer pour inclure", L"Excluded · click to include", L"Aus · zum Einschließen klicken", L"已排除 · 点击包含"), selector, 10,
-             device.selected ? (lightTheme() ? accentTint(0.36) : Color(255, 209, 198, 255))
-                             : Color(255, 135, 144, 165),
-             FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
+                 ? localized(L"Synchronisé · cliquer pour exclure", L"Synced · click to exclude", L"Synchronisiert · zum Ausschließen", L"已同步 · 点击排除")
+                 : localized(L"Exclu · cliquer pour inclure", L"Excluded · click to include", L"Aus · zum Einschließen", L"已排除 · 点击包含"),
+             selector, 8, device.selected ? accentTint(0.48) : secondaryTextColor(), FontStyleBold,
+             StringAlignmentCenter, StringAlignmentCenter);
         addHit(card, Action::ToggleRgb, index);
-        if (++column == 3) { column = 0; y += 118; }
+        if (++column == 3) { column = 0; y += cardHeight + cardGap; }
     }
     if (g_duckyDetected) {
-        float cardX = x + column * (cardWidth + 12);
-        RectF card(cardX, y, cardWidth, 106);
-        fillRound(graphics, card, 17, Color(255, 28, 32, 45));
-        strokeRound(graphics, card, 17, Color(255, 42, 48, 64));
-        text(graphics, L"Ducky One 2 Mini", RectF(card.X + 18, card.Y + 17, card.Width - 36, 20), 13, Color(255, 237, 239, 246), FontStyleBold);
-        text(graphics, std::wstring(L"DKON1861ST · ") + localized(L"firmware officiel", L"official firmware", L"offizielle Firmware", L"官方固件"), RectF(card.X + 18, card.Y + 42, card.Width - 36, 18), 10, Color(255, 135, 144, 165));
-        fillRound(graphics, RectF(card.X + 16, card.Y + 70, card.Width - 32, 24), 8, Color(255, 61, 48, 27));
-        text(graphics, localized(L"Ouvrir l'assistant sécurisé", L"Open safe assistant", L"Sicheren Assistenten öffnen", L"打开安全助手"), RectF(card.X + 16, card.Y + 70, card.Width - 32, 24), 10, Color(255, 240, 188, 99), FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
+        RectF card(x + column * (cardWidth + cardGap), y, cardWidth, cardHeight);
+        fillRound(graphics, card, 18, Color(255, 28, 32, 45));
+        strokeRound(graphics, card, 18, Color(255, 86, 66, 33));
+        RectF icon(card.X + 15, card.Y + 16, 42, 42);
+        fillRound(graphics, icon, 14, Color(255, 64, 48, 25));
+        text(graphics, L"DK", icon, 10, Color(255, 246, 190, 92), FontStyleBold,
+             StringAlignmentCenter, StringAlignmentCenter);
+        text(graphics, L"Ducky One 2 Mini", RectF(card.X + 69, card.Y + 15, card.Width - 87, 22), 12,
+             primaryTextColor(), FontStyleBold);
+        text(graphics, std::wstring(L"DKON1861ST · ") + localized(L"firmware officiel", L"official firmware", L"offizielle Firmware", L"官方固件"),
+             RectF(card.X + 69, card.Y + 39, card.Width - 87, 17), 9, secondaryTextColor());
+        RectF assistant(card.X + 15, card.Y + 72, card.Width - 30, 25);
+        fillRound(graphics, assistant, 9, Color(255, 61, 48, 27));
+        text(graphics, localized(L"Ouvrir l'assistant clavier", L"Open keyboard assistant", L"Tastatur-Assistent öffnen", L"打开键盘助手"),
+             assistant, 8, Color(255, 244, 190, 91), FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
         addHit(card, Action::DeviceOpenDuckyAssistant);
-        if (++column == 3) { column = 0; y += 118; }
+        if (++column == 3) { column = 0; y += cardHeight + cardGap; }
     }
-    if (column != 0 || (g_rgbDevices.empty() && !g_duckyDetected)) y += 118;
-    RectF colorCard(x, y + 8, available * 0.63f, 324);
-    fillRound(graphics, colorCard, 18, Color(255, 28, 32, 45));
-    strokeRound(graphics, colorCard, 18, Color(255, 39, 45, 61));
-    text(graphics, localized(L"Couleur principale", L"Main color", L"Hauptfarbe", L"主颜色"), RectF(colorCard.X + 22, colorCard.Y + 20, 260, 24), 17, Color::White, FontStyleBold);
-    text(graphics, localized(L"Appareils OpenRGB marqués Inclus", L"OpenRGB devices marked Included", L"Als aktiv markierte OpenRGB-Geräte", L"已包含的 OpenRGB 设备"), RectF(colorCard.X + 22, colorCard.Y + 47, colorCard.Width - 44, 18), 10, Color(255, 142, 150, 171));
-    RectF preview(colorCard.X + 22, colorCard.Y + 82, 78, 78);
+    if (column != 0) y += cardHeight + cardGap;
+    if (totalDevices == 0) {
+        RectF empty(x, y, available, 76);
+        fillRound(graphics, empty, 18, Color(255, 23, 27, 39));
+        strokeRound(graphics, empty, 18, Color(255, 47, 53, 68));
+        text(graphics, localized(L"Aucun appareil pour le moment · lance une nouvelle détection.",
+                                 L"No devices yet · run a new scan.", L"Noch keine Geräte · neu suchen.", L"暂无设备 · 请重新扫描。"),
+             empty, 11, secondaryTextColor(), FontStyleRegular, StringAlignmentCenter, StringAlignmentCenter);
+        y += 88;
+    }
+
+    const float colorWidth = available * 0.64f;
+    RectF colorCard(x, y + 8, colorWidth, 300);
+    fillRound(graphics, colorCard, 22, Color(255, 28, 32, 45));
+    strokeRound(graphics, colorCard, 22, Color(255, 47, 53, 68));
+    text(graphics, localized(L"Studio couleur", L"Color studio", L"Farbstudio", L"色彩工作室"),
+         RectF(colorCard.X + 22, colorCard.Y + 18, 250, 25), 17, primaryTextColor(), FontStyleBold);
+    text(graphics, localized(L"Une couleur pour tous les appareils synchronisés", L"One color for every synced device",
+                             L"Eine Farbe für alle synchronisierten Geräte", L"为所有同步设备设置统一颜色"),
+         RectF(colorCard.X + 22, colorCard.Y + 45, colorCard.Width - 44, 18), 9, secondaryTextColor());
+    RectF preview(colorCard.X + 22, colorCard.Y + 79, 70, 70);
     fillRound(graphics, preview, 22, rgbColor(g_baseColor));
+    strokeRound(graphics, preview, 22, Color(110, 255, 255, 255), 1.2f);
     addHit(preview, Action::PickColor);
-    text(graphics, localized(L"Valeur hexadécimale", L"Hex value", L"Hexadezimalwert", L"十六进制值"), RectF(colorCard.X + 120, colorCard.Y + 88, 230, 18), 10, Color(255, 142, 150, 171));
-    fillRound(graphics, RectF(colorCard.X + 120, colorCard.Y + 112, colorCard.Width - 142, 42), 9, Color(255, 17, 20, 29));
-    text(graphics, hexColor(g_baseColor), RectF(colorCard.X + 133, colorCard.Y + 112, colorCard.Width - 155, 42), 14, Color::White, FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
-    text(graphics, localized(L"Luminosité", L"Brightness", L"Helligkeit", L"亮度"), RectF(colorCard.X + 22, colorCard.Y + 174, 150, 20), 12, Color(255, 220, 224, 234));
-    text(graphics, std::to_wstring(g_brightness) + L" %", RectF(colorCard.GetRight() - 100, colorCard.Y + 174, 78, 20), 12,
-         lightTheme() ? accentTint(0.28) : Color(255, 200, 187, 255), FontStyleBold, StringAlignmentFar);
-    drawSlider(graphics, RectF(colorCard.X + 22, colorCard.Y + 198, colorCard.Width - 44, 30), g_brightness, 0, Action::Brightness);
+    text(graphics, localized(L"COULEUR ACTIVE", L"ACTIVE COLOR", L"AKTIVE FARBE", L"当前颜色"),
+         RectF(colorCard.X + 112, colorCard.Y + 78, 210, 17), 8, secondaryTextColor(), FontStyleBold);
+    RectF hexField(colorCard.X + 112, colorCard.Y + 100, colorCard.Width - 134, 43);
+    fillRound(graphics, hexField, 11, Color(255, 17, 20, 29));
+    strokeRound(graphics, hexField, 11, Color(255, 45, 51, 65));
+    text(graphics, hexColor(g_baseColor), RectF(hexField.X + 14, hexField.Y, hexField.Width - 28, hexField.Height),
+         14, primaryTextColor(), FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
+    text(graphics, localized(L"Luminosité", L"Brightness", L"Helligkeit", L"亮度"),
+         RectF(colorCard.X + 22, colorCard.Y + 166, 150, 20), 11, primaryTextColor(), FontStyleBold);
+    text(graphics, std::to_wstring(g_brightness) + L" %", RectF(colorCard.GetRight() - 100, colorCard.Y + 166, 78, 20),
+         11, accentTint(0.36), FontStyleBold, StringAlignmentFar);
+    drawSlider(graphics, RectF(colorCard.X + 22, colorCard.Y + 190, colorCard.Width - 44, 28),
+               g_brightness, 0, Action::Brightness);
     const std::uint32_t swatches[] = {0x7C5CFF, 0x149CFF, 0x00D69E, 0xFFB83D, 0xFF4F70, 0xFFFFFF};
-    const float applyWidth = std::clamp(colorCard.Width * 0.40f, 176.0f, 208.0f);
-    const RectF applyRect(colorCard.GetRight() - applyWidth - 22, colorCard.Y + 252, applyWidth, 44);
+    const float applyWidth = std::clamp(colorCard.Width * 0.36f, 164.0f, 204.0f);
+    const RectF applyRect(colorCard.GetRight() - applyWidth - 22, colorCard.Y + 237, applyWidth, 42);
     const float paletteWidth = applyRect.X - (colorCard.X + 22) - 14;
-    const float swatchSize = 30.0f;
+    const float swatchSize = 29.0f;
     const float swatchGap = std::clamp((paletteWidth - swatchSize * static_cast<float>(std::size(swatches))) /
-                                           static_cast<float>(std::size(swatches) - 1),
-                                       6.0f, 12.0f);
+                                           static_cast<float>(std::size(swatches) - 1), 5.0f, 11.0f);
     float swatchX = colorCard.X + 22;
     for (std::uint32_t swatch : swatches) {
-        RectF swatchRect(swatchX, colorCard.Y + 259, swatchSize, swatchSize);
-        fillRound(graphics, swatchRect, 9, rgbColor(swatch));
-        strokeRound(graphics, swatchRect, 9, swatch == g_baseColor ? Color::White : Color(255, 83, 96, 120), swatch == g_baseColor ? 2.0f : 1.0f);
+        RectF swatchRect(swatchX, colorCard.Y + 243, swatchSize, swatchSize);
+        fillRound(graphics, swatchRect, 10, rgbColor(swatch));
+        strokeRound(graphics, swatchRect, 10, swatch == g_baseColor ? primaryTextColor() : Color(255, 83, 96, 120),
+                    swatch == g_baseColor ? 2.0f : 1.0f);
         addHit(swatchRect, Action::SetColor, -1, swatch);
         swatchX += swatchSize + swatchGap;
     }
-    drawButton(graphics, applyRect, localized(L"Appliquer", L"Apply", L"Anwenden", L"应用"), true, Action::ApplyColor);
+    drawButton(graphics, applyRect, localized(L"Appliquer la couleur", L"Apply color", L"Farbe anwenden", L"应用颜色"),
+               true, Action::ApplyColor);
 
-    RectF activity(colorCard.GetRight() + 18, colorCard.Y, available - colorCard.Width - 18, colorCard.Height);
-    fillRound(graphics, activity, 18, Color(255, 28, 32, 45));
-    strokeRound(graphics, activity, 18, Color(255, 39, 45, 61));
-    text(graphics, localized(L"État du moteur", L"Engine status", L"Engine-Status", L"引擎状态"), RectF(activity.X + 20, activity.Y + 20, activity.Width - 40, 24), 16, Color::White, FontStyleBold);
-    const bool rgbEngineReady = g_openRgbReady || hasActivePluginDevice();
-    fillRound(graphics, RectF(activity.X + 20, activity.Y + 61, activity.Width - 40, 58), 13, rgbEngineReady ? Color(255, 16, 52, 43) : Color(255, 56, 42, 25));
-    text(graphics, rgbEngineReady ? localized(L"MOTEUR RGB ACTIF", L"RGB ENGINE ACTIVE", L"RGB-ENGINE AKTIV", L"RGB 引擎已启用")
-                                  : localized(L"MOTEUR RGB EN ATTENTE", L"RGB ENGINE WAITING", L"RGB-ENGINE WARTET", L"RGB 引擎等待中"),
-         RectF(activity.X + 34, activity.Y + 61, activity.Width - 68, 58), 11,
-         rgbEngineReady ? Color(255, 103, 225, 178) : Color(255, 255, 190, 120), FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
-    text(graphics, localized(L"Application native C++", L"Native C++ application", L"Native C++-Anwendung", L"原生 C++ 应用"), RectF(activity.X + 20, activity.Y + 142, activity.Width - 40, 20), 10, Color(255, 128, 137, 158));
-    textWrapped(graphics, g_status, RectF(activity.X + 20, activity.Y + 170, activity.Width - 40, 92), 11, Color(255, 213, 217, 228));
-    g_maxScroll = std::max(0.0f, colorCard.GetBottom() + g_scrollOffset + 16 - height);
+    RectF activity(colorCard.GetRight() + gap, colorCard.Y, available - colorCard.Width - gap, colorCard.Height);
+    fillRound(graphics, activity, 22, Color(255, 28, 32, 45));
+    strokeRound(graphics, activity, 22, Color(255, 47, 53, 68));
+    text(graphics, localized(L"Aperçu du système", L"System overview", L"Systemübersicht", L"系统概览"),
+         RectF(activity.X + 20, activity.Y + 18, activity.Width - 40, 24), 16, primaryTextColor(), FontStyleBold);
+    text(graphics, localized(L"État en temps réel", L"Live status", L"Live-Status", L"实时状态"),
+         RectF(activity.X + 20, activity.Y + 44, activity.Width - 40, 17), 9, secondaryTextColor());
+    struct OverviewRow { const wchar_t* label; std::wstring value; bool ready; } rows[] = {
+        {localized(L"Moteur RGB", L"RGB engine", L"RGB-Engine", L"RGB 引擎"),
+         rgbEngineReady ? localized(L"Actif", L"Active", L"Aktiv", L"已启用") : localized(L"En attente", L"Waiting", L"Wartet", L"等待中"), rgbEngineReady},
+        {localized(L"Appareils", L"Devices", L"Geräte", L"设备"), std::to_wstring(totalDevices), totalDevices > 0},
+        {localized(L"Ventilation", L"Cooling", L"Lüfter", L"风扇"), std::to_wstring(controllableFans), controllableFans > 0}
+    };
+    for (int index = 0; index < 3; ++index) {
+        RectF row(activity.X + 18, activity.Y + 73 + index * 49.0f, activity.Width - 36, 40);
+        fillRound(graphics, row, 12, Color(255, 23, 27, 39));
+        SolidBrush rowDot(rows[index].ready ? Color(255, 93, 226, 170) : Color(255, 239, 174, 86));
+        graphics.FillEllipse(&rowDot, RectF(row.X + 12, row.Y + 16, 8, 8));
+        text(graphics, rows[index].label, RectF(row.X + 29, row.Y, row.Width - 92, row.Height), 9,
+             secondaryTextColor(), FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
+        text(graphics, rows[index].value, RectF(row.GetRight() - 72, row.Y, 58, row.Height), 9,
+             rows[index].ready ? Color(255, 102, 224, 177) : Color(255, 242, 181, 92), FontStyleBold,
+             StringAlignmentFar, StringAlignmentCenter);
+    }
+    textWrapped(graphics, g_status, RectF(activity.X + 20, activity.Y + 231, activity.Width - 40, 49),
+                9, secondaryTextColor());
+    g_maxScroll = std::max(0.0f, colorCard.GetBottom() + g_scrollOffset + 18 - height);
 }
 
 std::vector<DeviceProviderDescriptor> currentProviderCatalog() {
@@ -8455,36 +8566,26 @@ void drawFastGlow(Graphics& graphics, const RectF& bounds, Color color) {
 
 void renderAnimatedBackgroundFrame(Graphics& graphics, int width, int height) {
     LinearGradientBrush base(PointF(0, 0), PointF(static_cast<REAL>(width), static_cast<REAL>(height)),
-                             lightTheme() ? Color(255, 250, 251, 254) : Color(255, 20, 22, 27),
-                             lightTheme() ? Color(255, 239, 243, 250) : Color(255, 31, 34, 41));
+                             lightTheme() ? Color(255, 247, 249, 253) : Color(255, 13, 15, 20),
+                             lightTheme() ? Color(255, 237, 242, 250) : Color(255, 22, 25, 33));
     constexpr INT stopCount = 5;
     Color colors[stopCount] = {
-        lightTheme() ? Color(255, 250, 251, 254) : Color(255, 20, 22, 27),
-        lightTheme() ? Color(255, 247, 249, 253) : Color(255, 25, 28, 34),
-        lightTheme() ? Color(255, 242, 246, 252) : Color(255, 31, 34, 41),
-        lightTheme() ? Color(255, 248, 246, 252) : Color(255, 27, 30, 36),
-        lightTheme() ? Color(255, 250, 251, 254) : Color(255, 19, 21, 26)
+        lightTheme() ? Color(255, 248, 250, 254) : Color(255, 13, 15, 20),
+        lightTheme() ? Color(255, 244, 247, 252) : Color(255, 18, 21, 28),
+        lightTheme() ? Color(255, 238, 243, 251) : Color(255, 25, 28, 37),
+        lightTheme() ? Color(255, 246, 244, 251) : Color(255, 21, 24, 32),
+        lightTheme() ? Color(255, 249, 250, 253) : Color(255, 12, 14, 19)
     };
     REAL positions[stopCount] = {0.0f, 0.28f, 0.54f, 0.78f, 1.0f};
     base.SetInterpolationColors(colors, positions, stopCount);
     graphics.FillRectangle(&base, 0, 0, width, height);
 
-    // Two wide auroras replace the old grid and large competing colour blobs.
-    // They preserve the RGB identity while leaving the controls visually quiet.
-    const float accentX = width * 0.72f;
-    drawFastGlow(graphics, RectF(accentX - 390.0f, -250.0f, 780.0f, 520.0f),
-                 accentColor(lightTheme() ? 18 : 27));
-    const float cyanX = width * 0.34f;
-    const float cyanY = height * 0.96f;
-    drawFastGlow(graphics, RectF(cyanX - 340.0f, cyanY - 220.0f, 680.0f, 440.0f),
-                 lightTheme() ? Color(20, 95, 208, 241) : Color(19, 27, 203, 190));
-
-    SolidBrush constellation(lightTheme() ? Color(24, 92, 107, 139) : Color(22, 151, 167, 202));
-    for (float y = 126.0f; y < height; y += 118.0f) {
-        for (float x = static_cast<float>(kSidebarWidth + 52); x < width; x += 142.0f) {
-            graphics.FillEllipse(&constellation, RectF(x, y, 1.4f, 1.4f));
-        }
-    }
+    // A quiet pair of blurred accents frames the content while preserving the
+    // neutral grey workspace requested for daily use.
+    drawFastGlow(graphics, RectF(width * 0.58f, -230.0f, 720.0f, 460.0f),
+                 accentColor(lightTheme() ? 16 : 24));
+    drawFastGlow(graphics, RectF(kSidebarWidth - 190.0f, height * 0.62f, 560.0f, 420.0f),
+                 lightTheme() ? Color(14, 38, 179, 213) : Color(15, 30, 188, 202));
 }
 
 void drawBackgroundMotion(Graphics& graphics, int width, int height) {
@@ -9526,7 +9627,7 @@ int createInterfaceCaptures(const fs::path& destination) {
     g_hoverAction = Action::None;
     g_downloadedUpdate = destination / L"RGBCcontrol-Setup-new.exe";
     g_updateAvailable = true;
-    g_availableVersion = L"0.16.24";
+    g_availableVersion = L"0.17.1";
     ok = savePageCapture(Page::Dashboard, 1020, 680, destination / L"header-update-ready.png") && ok;
     g_downloadedUpdate.clear();
     g_updateAvailable = false;

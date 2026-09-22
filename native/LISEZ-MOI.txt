@@ -1,5 +1,14 @@
-RGBCcontrol 0.16.24 — application native C++ pour Windows
+RGBCcontrol 0.17.0 — application native C++ pour Windows
 =====================================================
+
+Nouvelle interface 0.17.0
+-------------------------
+La structure visuelle a été entièrement recomposée. Le tableau de bord devient
+un véritable centre de contrôle avec une synthèse immédiate du setup, des
+actions rapides séparées, des cartes d'appareils plus claires, un studio couleur
+compact et un aperçu système en temps réel. La barre latérale, les en-têtes,
+les cartes et les arrière-plans utilisent désormais le même design Control Deck
+dans les thèmes sombre et clair, sans supprimer aucune option existante.
 
 Mise à jour 0.16.24
 --------------------

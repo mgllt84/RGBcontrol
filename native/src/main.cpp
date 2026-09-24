@@ -8,6 +8,7 @@
 #include <gdiplus.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <powersetting.h>
 #include <setupapi.h>
 #include <tlhelp32.h>
 #include <urlmon.h>
@@ -15,6 +16,7 @@
 
 #include "openrgb.hpp"
 #include "audio_loopback.hpp"
+#include "audio_sessions.hpp"
 #include "screen_capture.hpp"
 #include "plugin_engine.hpp"
 
@@ -73,17 +75,18 @@ constexpr WPARAM WTS_SESSION_LOCK_VALUE = 0x7;
 constexpr WPARAM WTS_SESSION_UNLOCK_VALUE = 0x8;
 constexpr int kHeaderHeight = 76;
 constexpr int kSidebarWidth = 188;
-constexpr wchar_t kAppVersion[] = L"0.18.0";
+constexpr wchar_t kAppVersion[] = L"0.20.0";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
 
-enum class Page { Dashboard, Effects, Profiles, Fans, Diagnostics, Settings, Devices, DuckyAssistant, Compatibility, Gamepads, SmartHub };
+enum class Page { Dashboard, Effects, Profiles, Fans, Diagnostics, Settings, Devices, DuckyAssistant, Compatibility, Gamepads, SmartHub, Sessions, AudioMixer };
 enum class Language { French, English, German, Chinese };
 enum class AppTheme { Dark, Light };
 enum class FanProfile { Auto, Quiet, Balanced, Performance, Custom };
+enum class PcSession { None, Gaming, Work, Streaming, Night };
 enum class Action {
-    None, NavDashboard, NavDevices, NavGamepads, NavEffects, NavProfiles, NavFans, NavDiagnostics, NavSmartHub, NavSettings, Donate, Refresh,
+    None, NavDashboard, NavDevices, NavGamepads, NavEffects, NavProfiles, NavFans, NavDiagnostics, NavSessions, NavSmartHub, NavAudioMixer, NavSettings, Donate, Refresh,
     HeaderStatus, HeaderUpdate, ToggleTheme, Minimize, Maximize, Close,
     DeviceOpenEffects, DeviceOpenFans, DeviceOpenDiagnostics, DeviceOpenDuckyAssistant, DeviceOpenCompatibility,
     ToggleRgb, PickColor, SetColor, ApplyColor, Brightness,
@@ -99,13 +102,19 @@ enum class Action {
     ScheduleDayHourDown, ScheduleDayHourUp, ScheduleNightHourDown, ScheduleNightHourUp,
     SelectLanguage, SelectTheme, Update, SelectAccent, SelectScanInterval, SelectEffectQuality,
     ToggleStartupQuiet, ToggleCloseToTray, ToggleRememberPage, ToggleReduceMotion, ResetPreferences,
+    TogglePerformanceOverlay, TogglePerformanceFps, TogglePerformanceCpu, TogglePerformanceGpu,
+    TogglePerformanceMemory, TogglePerformanceFans,
     PickerBackdrop, PickerWheel, PickerBrightness, PickerPreset, PickerCancel, PickerApply,
     DuckyBack, DuckyMode, DuckyPrevious, DuckyNext, DuckySync, DuckyOpenManual,
     DuckyCalibrationNextMode, DuckyCalibrationRestart, CompatibilityBack, CompatibilityRun,
     CertificationStart, CertificationYes, CertificationNo,
     GamepadTogglePlayerLeds, GamepadApplyColor, GamepadUseNative, GamepadUseXbox,
     GamepadToggleAutoPriority, GamepadRotate, GamepadResetView,
-    ToggleAutopilot, ToggleSystemNotifications, LayoutDevice, LayoutReset, OpenTaskManager
+    ToggleAutopilot, ToggleSystemNotifications, LayoutDevice, LayoutReset, OpenTaskManager,
+    StartPcSession, StopPcSession, SessionBindApplication, SessionClearApplication,
+    ToggleSessionPower, ToggleSessionCooling, ToggleSessionGamepad, ToggleSessionLaunchApps,
+    OpenSoundSettings, OpenFocusSettings, OpenGameModeSettings, OpenGameBar,
+    AudioRefresh, AudioMasterVolume, AudioMasterMute, AudioVolume, AudioMute, AudioOpenWindowsMixer
 };
 
 struct HitTarget {
@@ -142,6 +151,12 @@ struct SetupPlacement {
     std::wstring key;
     float x = 0.5f;
     float y = 0.5f;
+};
+
+struct PcFanSnapshot {
+    std::string id;
+    int desired = 30;
+    bool manual = false;
 };
 
 struct ScanResult {
@@ -224,6 +239,7 @@ const DuckyModeInfo kDuckyModes[] = {
 };
 
 HWND g_window = nullptr;
+HWND g_performanceOverlayWindow = nullptr;
 ULONG_PTR g_gdiplusToken = 0;
 std::unique_ptr<Image> g_logo;
 std::unique_ptr<Image> g_dualSenseImage;
@@ -389,6 +405,8 @@ bool parseDualSenseInputReport(const BYTE* report, std::size_t size, bool blueto
                                DualSenseLiveState& state);
 bool updateDualSenseVisualAxes(ULONGLONG now, bool snap = false);
 void applyWindowChromeTheme();
+void updatePerformanceOverlayWindow();
+void destroyPerformanceOverlayWindow();
 void saveTelemetryHistory();
 void loadTelemetryHistory();
 bool g_openRgbReady = false;
@@ -407,6 +425,10 @@ std::atomic<double> g_audioMid{0.0};
 std::atomic<double> g_audioTreble{0.0};
 std::atomic<bool> g_audioCaptureReady{false};
 std::atomic<bool> g_audioSignal{false};
+std::vector<AudioSessionInfo> g_audioSessions;
+AudioEndpointInfo g_audioEndpoint;
+std::wstring g_audioMixerStatus;
+ULONGLONG g_lastAudioMixerRefresh = 0;
 std::vector<ScreenMonitorInfo> g_screenMonitors;
 int g_ambientMonitorIndex = 0;
 std::atomic<int> g_ambientSaturation{68};
@@ -524,10 +546,42 @@ std::wstring g_lastConflictAlert;
 bool g_temperatureAlertActive = false;
 std::vector<SetupPlacement> g_setupPlacements;
 RectF g_setupLayoutCanvas;
+PcSession g_pcSession = PcSession::None;
+bool g_sessionPowerEnabled = true;
+bool g_sessionCoolingEnabled = true;
+bool g_sessionGamepadEnabled = true;
+bool g_sessionLaunchAppsEnabled = true;
+std::array<std::wstring, 3> g_sessionApplications;
+bool g_sessionSnapshotValid = false;
+bool g_sessionPowerSnapshotKnown = false;
+GUID g_sessionPowerSnapshot{};
+FanProfile g_sessionFanSnapshot = FanProfile::Auto;
+bool g_sessionFanCurveSnapshot = false;
+bool g_sessionGamepadAutoSnapshot = true;
+bool g_sessionXboxSnapshot = false;
+std::unordered_map<DWORD, DWORD> g_sessionProcessPriorities;
+std::vector<PcFanSnapshot> g_sessionFanValues;
+std::wstring g_sessionStatus;
+bool g_sessionPrimarySeen = false;
+ULONGLONG g_lastPcSessionCheck = 0;
 bool g_gamepadAutoPriority = true;
 int g_textScale = 1;
 bool g_highContrast = false;
 bool g_compactDashboard = false;
+bool g_performanceOverlayEnabled = false;
+bool g_performanceShowFps = true;
+bool g_performanceShowCpu = true;
+bool g_performanceShowGpu = true;
+bool g_performanceShowMemory = true;
+bool g_performanceShowFans = true;
+double g_uiFps = 60.0;
+bool g_performanceOverlayExternalRendering = false;
+ULONGLONG g_lastPaintAt = 0;
+ULONGLONG g_lastPerformanceInvalidateAt = 0;
+ULONGLONG g_cpuUsageIdlePrevious = 0;
+ULONGLONG g_cpuUsageKernelPrevious = 0;
+ULONGLONG g_cpuUsageUserPrevious = 0;
+bool g_cpuUsageSampleReady = false;
 AppProfile g_undoProfile;
 bool g_hasUndoProfile = false;
 bool g_restoringSnapshot = false;
@@ -1493,13 +1547,27 @@ void saveAutomationSettings() {
     writeIniInteger(path, section, L"RestoreOnWake", g_restoreOnWake ? 1 : 0);
     writeIniInteger(path, section, L"SmartMode", g_smartModeEnabled ? 1 : 0);
     writeIniInteger(path, section, L"SystemNotifications", g_systemNotificationsEnabled ? 1 : 0);
+    writeIniInteger(path, section, L"SessionPower", g_sessionPowerEnabled ? 1 : 0);
+    writeIniInteger(path, section, L"SessionCooling", g_sessionCoolingEnabled ? 1 : 0);
+    writeIniInteger(path, section, L"SessionGamepad", g_sessionGamepadEnabled ? 1 : 0);
+    writeIniInteger(path, section, L"SessionLaunchApps", g_sessionLaunchAppsEnabled ? 1 : 0);
     writeIniInteger(path, section, L"GamepadAutoPriority", g_gamepadAutoPriority ? 1 : 0);
     writeIniInteger(path, section, L"TextScale", g_textScale);
     writeIniInteger(path, section, L"HighContrast", g_highContrast ? 1 : 0);
     writeIniInteger(path, section, L"CompactDashboard", g_compactDashboard ? 1 : 0);
+    writeIniInteger(path, section, L"PerformanceOverlay", g_performanceOverlayEnabled ? 1 : 0);
+    writeIniInteger(path, section, L"PerformanceFps", g_performanceShowFps ? 1 : 0);
+    writeIniInteger(path, section, L"PerformanceCpu", g_performanceShowCpu ? 1 : 0);
+    writeIniInteger(path, section, L"PerformanceGpu", g_performanceShowGpu ? 1 : 0);
+    writeIniInteger(path, section, L"PerformanceMemory", g_performanceShowMemory ? 1 : 0);
+    writeIniInteger(path, section, L"PerformanceFans", g_performanceShowFans ? 1 : 0);
     for (int index = 0; index < static_cast<int>(g_profileApplications.size()); ++index) {
         const std::wstring key = L"ProfileApplication" + std::to_wstring(index + 1);
         WritePrivateProfileStringW(section.c_str(), key.c_str(), g_profileApplications[index].c_str(), path.c_str());
+    }
+    for (int index = 0; index < static_cast<int>(g_sessionApplications.size()); ++index) {
+        const std::wstring key = L"SessionApplication" + std::to_wstring(index + 1);
+        WritePrivateProfileStringW(section.c_str(), key.c_str(), g_sessionApplications[index].c_str(), path.c_str());
     }
     syncSetupPlacements();
     writeIniInteger(path, section, L"SetupPlacementCount", static_cast<int>(g_setupPlacements.size()));
@@ -1534,7 +1602,7 @@ void loadAutomationSettings() {
     g_dualSensePlayerLedsEnabled = readIniInteger(path, section, L"DualSensePlayerLeds", 1) != 0;
     g_xboxModeEnabled = readIniInteger(path, section, L"DualSenseXboxMode", 0) != 0;
     if (g_rememberLastPage) {
-        g_page = static_cast<Page>(std::clamp(readIniInteger(path, section, L"LastPage", 0), 0, 10));
+        g_page = static_cast<Page>(std::clamp(readIniInteger(path, section, L"LastPage", 0), 0, 12));
     }
     g_scheduleEnabled = readIniInteger(path, section, L"ScheduleEnabled", 0) != 0;
     g_scheduleDayHour = std::clamp(readIniInteger(path, section, L"DayHour", 8), 0, 23);
@@ -1547,13 +1615,27 @@ void loadAutomationSettings() {
     g_restoreOnWake = readIniInteger(path, section, L"RestoreOnWake", 1) != 0;
     g_smartModeEnabled = readIniInteger(path, section, L"SmartMode", 0) != 0;
     g_systemNotificationsEnabled = readIniInteger(path, section, L"SystemNotifications", 1) != 0;
+    g_sessionPowerEnabled = readIniInteger(path, section, L"SessionPower", 1) != 0;
+    g_sessionCoolingEnabled = readIniInteger(path, section, L"SessionCooling", 1) != 0;
+    g_sessionGamepadEnabled = readIniInteger(path, section, L"SessionGamepad", 1) != 0;
+    g_sessionLaunchAppsEnabled = readIniInteger(path, section, L"SessionLaunchApps", 1) != 0;
     g_gamepadAutoPriority = readIniInteger(path, section, L"GamepadAutoPriority", 1) != 0;
     g_textScale = std::clamp(readIniInteger(path, section, L"TextScale", 1), 0, 2);
     g_highContrast = readIniInteger(path, section, L"HighContrast", 0) != 0;
     g_compactDashboard = readIniInteger(path, section, L"CompactDashboard", 0) != 0;
+    g_performanceOverlayEnabled = readIniInteger(path, section, L"PerformanceOverlay", 0) != 0;
+    g_performanceShowFps = readIniInteger(path, section, L"PerformanceFps", 1) != 0;
+    g_performanceShowCpu = readIniInteger(path, section, L"PerformanceCpu", 1) != 0;
+    g_performanceShowGpu = readIniInteger(path, section, L"PerformanceGpu", 1) != 0;
+    g_performanceShowMemory = readIniInteger(path, section, L"PerformanceMemory", 1) != 0;
+    g_performanceShowFans = readIniInteger(path, section, L"PerformanceFans", 1) != 0;
     for (int index = 0; index < static_cast<int>(g_profileApplications.size()); ++index) {
         const std::wstring key = L"ProfileApplication" + std::to_wstring(index + 1);
         g_profileApplications[index] = readIniText(path, section, key.c_str());
+    }
+    for (int index = 0; index < static_cast<int>(g_sessionApplications.size()); ++index) {
+        const std::wstring key = L"SessionApplication" + std::to_wstring(index + 1);
+        g_sessionApplications[index] = readIniText(path, section, key.c_str());
     }
     g_setupPlacements.clear();
     const int placementCount = std::clamp(readIniInteger(path, section, L"SetupPlacementCount", 0), 0, 64);
@@ -4139,6 +4221,244 @@ void evaluateSmartMode() {
     }
 }
 
+const wchar_t* pcSessionName(PcSession session) {
+    switch (session) {
+        case PcSession::Gaming: return localized(L"Jeu", L"Gaming", L"Gaming", L"游戏");
+        case PcSession::Work: return localized(L"Travail", L"Work", L"Arbeit", L"工作");
+        case PcSession::Streaming: return localized(L"Streaming", L"Streaming", L"Streaming", L"直播");
+        case PcSession::Night: return localized(L"Nuit", L"Night", L"Nacht", L"夜间");
+        default: return localized(L"Aucune", L"None", L"Keine", L"无");
+    }
+}
+
+int memoryLoadPercent() {
+    MEMORYSTATUSEX memory{};
+    memory.dwLength = sizeof(memory);
+    return GlobalMemoryStatusEx(&memory) ? static_cast<int>(memory.dwMemoryLoad) : -1;
+}
+
+int systemCpuLoadPercent() {
+    FILETIME idleTime{}, kernelTime{}, userTime{};
+    if (!GetSystemTimes(&idleTime, &kernelTime, &userTime)) return -1;
+    auto toTicks = [](const FILETIME& value) {
+        ULARGE_INTEGER ticks{};
+        ticks.LowPart = value.dwLowDateTime;
+        ticks.HighPart = value.dwHighDateTime;
+        return ticks.QuadPart;
+    };
+    const ULONGLONG idle = toTicks(idleTime);
+    const ULONGLONG kernel = toTicks(kernelTime);
+    const ULONGLONG user = toTicks(userTime);
+    if (!g_cpuUsageSampleReady) {
+        g_cpuUsageIdlePrevious = idle;
+        g_cpuUsageKernelPrevious = kernel;
+        g_cpuUsageUserPrevious = user;
+        g_cpuUsageSampleReady = true;
+        return -1;
+    }
+    const ULONGLONG idleDelta = idle - g_cpuUsageIdlePrevious;
+    const ULONGLONG totalDelta = (kernel - g_cpuUsageKernelPrevious) + (user - g_cpuUsageUserPrevious);
+    g_cpuUsageIdlePrevious = idle;
+    g_cpuUsageKernelPrevious = kernel;
+    g_cpuUsageUserPrevious = user;
+    if (totalDelta == 0) return -1;
+    const double busy = 1.0 - static_cast<double>(idleDelta) / static_cast<double>(totalDelta);
+    return std::clamp(static_cast<int>(std::lround(busy * 100.0)), 0, 100);
+}
+
+bool captureActivePowerScheme(GUID& scheme) {
+    GUID* active = nullptr;
+    if (PowerGetActiveScheme(nullptr, &active) != ERROR_SUCCESS || !active) return false;
+    scheme = *active;
+    LocalFree(active);
+    return true;
+}
+
+bool applyPcSessionPowerScheme(PcSession session) {
+    const GUID* target = &GUID_TYPICAL_POWER_SAVINGS;
+    if (session == PcSession::Gaming || session == PcSession::Streaming) target = &GUID_MIN_POWER_SAVINGS;
+    else if (session == PcSession::Night) target = &GUID_MAX_POWER_SAVINGS;
+    DWORD result = PowerSetActiveScheme(nullptr, target);
+    if (result != ERROR_SUCCESS && session == PcSession::Night) {
+        result = PowerSetActiveScheme(nullptr, &GUID_TYPICAL_POWER_SAVINGS);
+    }
+    return result == ERROR_SUCCESS;
+}
+
+std::vector<std::pair<DWORD, std::wstring>> runningProcesses() {
+    std::vector<std::pair<DWORD, std::wstring>> result;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return result;
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            std::wstring executable = entry.szExeFile;
+            std::transform(executable.begin(), executable.end(), executable.begin(), [](wchar_t character) {
+                return static_cast<wchar_t>(towlower(character));
+            });
+            result.emplace_back(entry.th32ProcessID, std::move(executable));
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return result;
+}
+
+bool processIsRunning(const std::wstring& executable, const std::vector<std::pair<DWORD, std::wstring>>& processes) {
+    if (executable.empty()) return false;
+    const std::wstring wanted = normalizedExecutableName(executable);
+    return std::any_of(processes.begin(), processes.end(), [&](const auto& process) { return process.second == wanted; });
+}
+
+void applyPcSessionProcessPriorities(const std::vector<std::pair<DWORD, std::wstring>>& processes) {
+    if (g_pcSession == PcSession::None) return;
+    const DWORD target = (g_pcSession == PcSession::Gaming || g_pcSession == PcSession::Streaming)
+        ? ABOVE_NORMAL_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS;
+    for (const auto& [processId, executable] : processes) {
+        const bool configured = std::any_of(g_sessionApplications.begin(), g_sessionApplications.end(),
+            [&](const std::wstring& path) { return !path.empty() && normalizedExecutableName(path) == executable; });
+        if (!configured) continue;
+        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION, FALSE, processId);
+        if (!process) continue;
+        const DWORD previous = GetPriorityClass(process);
+        if (previous != 0 && !g_sessionProcessPriorities.contains(processId)) {
+            g_sessionProcessPriorities.emplace(processId, previous);
+        }
+        SetPriorityClass(process, target);
+        CloseHandle(process);
+    }
+}
+
+void restorePcSessionProcessPriorities() {
+    for (const auto& [processId, priority] : g_sessionProcessPriorities) {
+        HANDLE process = OpenProcess(PROCESS_SET_INFORMATION, FALSE, processId);
+        if (!process) continue;
+        SetPriorityClass(process, priority);
+        CloseHandle(process);
+    }
+    g_sessionProcessPriorities.clear();
+}
+
+void stopPcSession(bool notify = true);
+
+void evaluatePcSession() {
+    if (g_pcSession == PcSession::None) return;
+    const auto processes = runningProcesses();
+    applyPcSessionProcessPriorities(processes);
+    if (!g_sessionApplications[0].empty()) {
+        const bool primaryRunning = processIsRunning(g_sessionApplications[0], processes);
+        if (primaryRunning) g_sessionPrimarySeen = true;
+        else if (g_sessionPrimarySeen) {
+            stopPcSession(true);
+        }
+    }
+}
+
+void startPcSession(PcSession session) {
+    if (session == PcSession::None) return;
+    if (g_pcSession != PcSession::None) stopPcSession(false);
+
+    g_sessionSnapshotValid = true;
+    g_sessionPowerSnapshotKnown = captureActivePowerScheme(g_sessionPowerSnapshot);
+    g_sessionFanSnapshot = g_fanProfile;
+    g_sessionFanCurveSnapshot = g_fanCurveEnabled;
+    g_sessionFanValues.clear();
+    for (const FanDevice& fan : g_fans) {
+        if (fan.controllable) g_sessionFanValues.push_back({fan.encodedId, fan.desired, fan.manual});
+    }
+    g_sessionGamepadAutoSnapshot = g_gamepadAutoPriority;
+    g_sessionXboxSnapshot = g_xboxModeEnabled || g_xboxBridgeProcess != nullptr;
+    g_sessionProcessPriorities.clear();
+    g_sessionPrimarySeen = false;
+    g_pcSession = session;
+
+    bool powerApplied = true;
+    if (g_sessionPowerEnabled) powerApplied = applyPcSessionPowerScheme(session);
+
+    if (g_sessionCoolingEnabled) {
+        Action cooling = Action::FanProfileBalanced;
+        if (session == PcSession::Streaming) cooling = Action::FanProfilePerformance;
+        else if (session == PcSession::Work || session == PcSession::Night) cooling = Action::FanProfileQuiet;
+        if (g_isAdministrator) applyFanProfile(cooling);
+        else {
+            g_fanStatus = localized(L"Session active : le contrôle des ventilateurs demande le mode avancé.",
+                                    L"Session active: fan control requires advanced mode.",
+                                    L"Sitzung aktiv: Lüftersteuerung benötigt den erweiterten Modus.",
+                                    L"会话已启用：风扇控制需要高级模式。 ");
+        }
+    }
+
+    if (g_sessionGamepadEnabled && (session == PcSession::Gaming || session == PcSession::Streaming)) {
+        g_gamepadAutoPriority = true;
+        if (dualSenseDeviceCount() > 0 && g_xboxBridgeStatus != XboxBridgeStatus::Ready &&
+            g_xboxBridgeStatus != XboxBridgeStatus::Starting) {
+            g_xboxModeEnabled = true;
+            if (startXboxBridge() && g_dualSenseLive.seen) sendXboxState(g_dualSenseLive);
+        }
+    }
+
+    int launched = 0;
+    if (g_sessionLaunchAppsEnabled) {
+        const auto alreadyRunning = runningProcesses();
+        for (const std::wstring& application : g_sessionApplications) {
+            if (application.empty() || !fs::exists(application)) continue;
+            if (processIsRunning(application, alreadyRunning)) continue;
+            const fs::path path(application);
+            if (reinterpret_cast<INT_PTR>(ShellExecuteW(g_window, L"open", path.c_str(), nullptr,
+                                                        path.parent_path().c_str(), SW_SHOWNORMAL)) > 32) ++launched;
+        }
+    }
+    evaluatePcSession();
+    g_sessionStatus = std::wstring(pcSessionName(session)) + localized(L" est prêt", L" is ready", L" ist bereit", L"已准备就绪") +
+        (launched > 0 ? localized(L" · applications lancées", L" · apps launched", L" · Apps gestartet", L" · 应用已启动") : L"") +
+        (!powerApplied ? localized(L" · mode d'alimentation indisponible", L" · power mode unavailable",
+                                  L" · Energiemodus nicht verfügbar", L" · 电源模式不可用") : L"");
+    showSystemNotification(localized(L"Session PC activée", L"PC session enabled", L"PC-Sitzung aktiviert", L"电脑会话已启用"),
+                           g_sessionStatus);
+    saveAutomationSettings();
+}
+
+void stopPcSession(bool notify) {
+    if (g_pcSession == PcSession::None) return;
+    const PcSession stopped = g_pcSession;
+    restorePcSessionProcessPriorities();
+    if (g_sessionSnapshotValid && g_sessionPowerEnabled && g_sessionPowerSnapshotKnown) {
+        PowerSetActiveScheme(nullptr, &g_sessionPowerSnapshot);
+    }
+    if (g_sessionSnapshotValid && g_sessionCoolingEnabled && g_isAdministrator) {
+        g_fanProfile = g_sessionFanSnapshot;
+        g_fanCurveEnabled = g_sessionFanCurveSnapshot;
+        for (const PcFanSnapshot& saved : g_sessionFanValues) {
+            auto fan = std::find_if(g_fans.begin(), g_fans.end(), [&](const FanDevice& candidate) {
+                return candidate.encodedId == saved.id;
+            });
+            if (fan == g_fans.end()) continue;
+            fan->desired = saved.desired;
+            changeFan(static_cast<int>(std::distance(g_fans.begin(), fan)), !saved.manual);
+        }
+        if (g_sessionFanCurveSnapshot) applyFanCurve(true);
+    }
+    if (g_sessionSnapshotValid && g_sessionGamepadEnabled) {
+        g_gamepadAutoPriority = g_sessionGamepadAutoSnapshot;
+        if (!g_sessionXboxSnapshot && (g_xboxModeEnabled || g_xboxBridgeProcess)) stopXboxBridge();
+        else if (g_sessionXboxSnapshot && g_xboxBridgeStatus == XboxBridgeStatus::Off) {
+            g_xboxModeEnabled = true;
+            if (startXboxBridge() && g_dualSenseLive.seen) sendXboxState(g_dualSenseLive);
+        }
+    }
+    g_pcSession = PcSession::None;
+    g_sessionSnapshotValid = false;
+    g_sessionPowerSnapshotKnown = false;
+    g_sessionPrimarySeen = false;
+    g_sessionFanValues.clear();
+    g_sessionStatus = std::wstring(pcSessionName(stopped)) + localized(L" arrêtée · réglages restaurés",
+        L" stopped · settings restored", L" beendet · Einstellungen wiederhergestellt", L"已停止 · 设置已恢复");
+    if (notify) {
+        showSystemNotification(localized(L"Session terminée", L"Session ended", L"Sitzung beendet", L"会话已结束"),
+                               g_sessionStatus);
+    }
+}
+
 void handleAwayState(bool away) {
     if (away) {
         if (!g_sleepLightsEnabled || g_sleepRestoreReady) return;
@@ -4935,12 +5255,27 @@ void drawNavigationIcon(Graphics& graphics, int iconIndex, const RectF& bounds, 
             graphics.DrawLines(&pen, pulse, static_cast<INT>(std::size(pulse)));
             break;
         }
-        case 7: { // Pilote automatique
+        case 7: { // Sessions PC
+            PointF play[] = {PointF(cx - 5, cy - 7), PointF(cx + 7, cy), PointF(cx - 5, cy + 7)};
+            graphics.DrawPolygon(&pen, play, 3);
+            graphics.DrawEllipse(&pen, cx - 9.0f, cy - 9.0f, 18.0f, 18.0f);
+            break;
+        }
+        case 8: { // Pilote automatique
             PointF bolt[] = {
                 PointF(cx + 1, cy - 9), PointF(cx - 6, cy + 1), PointF(cx - 1, cy + 1),
                 PointF(cx - 3, cy + 9), PointF(cx + 7, cy - 3), PointF(cx + 2, cy - 3)
             };
             graphics.DrawLines(&pen, bolt, static_cast<INT>(std::size(bolt)));
+            break;
+        }
+        case 9: { // Mixeur audio
+            graphics.DrawArc(&pen, cx - 8.5f, cy - 7.0f, 9.0f, 14.0f, 90.0f, 180.0f);
+            graphics.DrawLine(&pen, cx - 4.0f, cy - 7.0f, cx + 1.0f, cy - 7.0f);
+            graphics.DrawLine(&pen, cx - 4.0f, cy + 7.0f, cx + 1.0f, cy + 7.0f);
+            graphics.DrawLine(&pen, cx + 1.0f, cy - 7.0f, cx + 1.0f, cy + 7.0f);
+            graphics.DrawArc(&pen, cx + 2.0f, cy - 5.0f, 7.0f, 10.0f, -72.0f, 144.0f);
+            graphics.DrawArc(&pen, cx + 3.5f, cy - 8.0f, 11.0f, 16.0f, -68.0f, 136.0f);
             break;
         }
         default: { // Paramètres
@@ -4976,13 +5311,17 @@ void drawNavigation(Graphics& graphics, int height) {
         {localized(L"Profils", L"Profiles", L"Profile", L"模式"), Page::Profiles, Action::NavProfiles},
         {localized(L"Ventilation", L"Cooling", L"Lüfter", L"风扇控制"), Page::Fans, Action::NavFans},
         {localized(L"Diagnostic", L"Diagnostics", L"Diagnose", L"诊断"), Page::Diagnostics, Action::NavDiagnostics},
+        {localized(L"Sessions PC", L"PC Sessions", L"PC-Sitzungen", L"电脑会话"), Page::Sessions, Action::NavSessions},
         {localized(L"Pilote auto", L"Smart Hub", L"Autopilot", L"自动驾驶"), Page::SmartHub, Action::NavSmartHub},
+        {localized(L"Mixeur audio", L"Audio mixer", L"Audiomixer", L"音频混音器"), Page::AudioMixer, Action::NavAudioMixer},
         {localized(L"Paramètres", L"Settings", L"Einstellungen", L"设置"), Page::Settings, Action::NavSettings}
     };
-    float y = static_cast<float>(kHeaderHeight + 43);
+    float y = static_cast<float>(kHeaderHeight + 40);
+    const float navHeight = height <= 700 ? 34.0f : 38.0f;
+    const float navStep = height <= 700 ? 36.0f : 41.0f;
     int navIndex = 0;
     for (const Nav& nav : navs) {
-        RectF rect(12, y, static_cast<float>(kSidebarWidth - 24), 41);
+        RectF rect(12, y, static_cast<float>(kSidebarWidth - 24), navHeight);
         const bool active = g_page == nav.page ||
                             (nav.page == Page::Devices && (g_page == Page::DuckyAssistant || g_page == Page::Compatibility));
         const bool hovered = g_hoverAction == nav.action;
@@ -4996,7 +5335,7 @@ void drawNavigation(Graphics& graphics, int height) {
         } else if (hovered) {
             fillRound(graphics, rect, 14, lightTheme() ? Color(255, 234, 239, 248) : Color(230, 32, 36, 46));
         }
-        RectF icon(rect.X + 11, rect.Y + 5.5f, 30, 30);
+        RectF icon(rect.X + 11, rect.Y + (rect.Height - 30.0f) / 2.0f, 30, 30);
         if (!active) {
             fillRound(graphics, icon, 10, lightTheme() ? Color(255, 238, 242, 249) : Color(255, 27, 31, 40));
             strokeRound(graphics, icon, 10, lightTheme() ? Color(255, 216, 222, 234) : Color(255, 44, 50, 64));
@@ -5007,7 +5346,7 @@ void drawNavigation(Graphics& graphics, int height) {
              active ? accentButtonText() : Color(255, 168, 177, 198),
              active ? FontStyleBold : FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
         addHit(rect, nav.action);
-        y += 46;
+        y += navStep;
         ++navIndex;
     }
     RectF donate(14, static_cast<float>(height - 126), static_cast<float>(kSidebarWidth - 28), 40);
@@ -7893,6 +8232,18 @@ std::wstring diagnosticReport() {
            << L" | restore=" << (g_restoreOnWake ? L"yes" : L"no") << L"\r\n";
     report << L"Controller automatic priority: " << (g_gamepadAutoPriority ? L"Enabled" : L"Disabled")
            << L" | XInput=" << (g_xboxBridgeStatus == XboxBridgeStatus::Ready ? L"ready" : L"inactive") << L"\r\n";
+    report << L"PC session: " << pcSessionName(g_pcSession)
+           << L" | power=" << (g_sessionPowerEnabled ? L"yes" : L"no")
+           << L" | cooling=" << (g_sessionCoolingEnabled ? L"yes" : L"no")
+           << L" | controller=" << (g_sessionGamepadEnabled ? L"yes" : L"no")
+           << L" | launch_apps=" << (g_sessionLaunchAppsEnabled ? L"yes" : L"no") << L"\r\n";
+    for (std::size_t index = 0; index < g_sessionApplications.size(); ++index) {
+        if (!g_sessionApplications[index].empty()) {
+            report << L"  - session app " << (index + 1) << L" -> "
+                   << normalizedExecutableName(g_sessionApplications[index]) << L"\r\n";
+        }
+    }
+    report << L"Memory load: " << memoryLoadPercent() << L" %\r\n";
     report << L"Hardware history samples: " << g_telemetry.size() << L"\r\n";
     const std::wstring rgbConflict = rgbConflictProcess();
     report << L"Competing RGB engine: " << (rgbConflict.empty() ? L"No" : rgbConflict) << L"\r\n";
@@ -8144,6 +8495,156 @@ void drawDiagnostics(Graphics& graphics, int width, int height, float originY) {
     g_maxScroll = std::max(0.0f, y + g_scrollOffset + 20 - height);
 }
 
+void refreshAudioMixer(bool force) {
+    const ULONGLONG now = GetTickCount64();
+    if (!force && now - g_lastAudioMixerRefresh < 1800) return;
+    if (g_dragAction == Action::AudioVolume || g_dragAction == Action::AudioMasterVolume) return;
+    g_lastAudioMixerRefresh = now;
+    std::vector<AudioSessionInfo> sessions;
+    AudioEndpointInfo endpoint;
+    std::wstring error;
+    if (enumerateAudioSessions(sessions, endpoint, error)) {
+        g_audioSessions = std::move(sessions);
+        g_audioEndpoint = endpoint;
+        if (g_audioSessions.empty()) {
+            g_audioMixerStatus = localized(L"Aucune application ne produit encore de son.",
+                L"No application is producing sound yet.", L"Noch keine Anwendung gibt Ton wieder.", L"尚无应用正在播放声音。");
+        } else {
+            g_audioMixerStatus = std::to_wstring(g_audioSessions.size()) +
+                localized(L" application(s) audio détectée(s)", L" audio application(s) detected",
+                          L" Audio-Anwendung(en) erkannt", L" 个音频应用已检测");
+        }
+    } else {
+        g_audioMixerStatus = error.empty()
+            ? localized(L"Le mixeur Windows est indisponible.", L"Windows audio mixer is unavailable.",
+                        L"Der Windows-Audiomixer ist nicht verfügbar.", L"Windows 音频混音器不可用。")
+            : error;
+    }
+}
+
+void drawAudioMixer(Graphics& graphics, int width, int height, float originY) {
+    const float x = kSidebarWidth + 32.0f;
+    const float available = width - x - 32.0f;
+    const bool compactHeader = width < 1100;
+    drawPageIntro(graphics, x, originY, compactHeader ? available : std::max(320.0f, available - 350.0f),
+                  localized(L"AUDIO", L"AUDIO", L"AUDIO", L"音频"),
+                  localized(L"Chaque application, au bon volume.", L"Every app at the right volume.",
+                            L"Jede App in der richtigen Lautstärke.", L"每个应用都有合适的音量。"));
+    const float headerButtonY = originY + (compactHeader ? 78.0f : 11.0f);
+    drawButton(graphics, RectF(width - 344.0f, headerButtonY, 142, 40),
+               localized(L"Mixeur Windows", L"Windows mixer", L"Windows-Mixer", L"Windows 混音器"),
+               false, Action::AudioOpenWindowsMixer);
+    drawButton(graphics, RectF(width - 190.0f, headerButtonY, 152, 40),
+               localized(L"Actualiser", L"Refresh", L"Aktualisieren", L"刷新"),
+               false, Action::AudioRefresh);
+
+    float y = originY + (compactHeader ? 132.0f : 84.0f);
+    RectF master(x, y, available, 128.0f);
+    fillRound(graphics, master, 20, Color(255, 27, 31, 44));
+    strokeRound(graphics, master, 20, g_audioEndpoint.muted ? Color(255, 160, 78, 91) : accentColor(120), 1.2f);
+    SolidBrush speaker(accentColor());
+    GraphicsPath speakerPath;
+    speakerPath.StartFigure();
+    speakerPath.AddPolygon(std::array<PointF, 6>{PointF(master.X + 24, master.Y + 51), PointF(master.X + 35, master.Y + 51),
+        PointF(master.X + 48, master.Y + 40), PointF(master.X + 48, master.Y + 78), PointF(master.X + 35, master.Y + 67),
+        PointF(master.X + 24, master.Y + 67)}.data(), 6);
+    speakerPath.CloseFigure();
+    graphics.FillPath(&speaker, &speakerPath);
+    Pen wave(accentTint(0.45), 2.0f);
+    graphics.DrawArc(&wave, master.X + 41.0f, master.Y + 46.0f, 23.0f, 26.0f, -65.0f, 130.0f);
+    graphics.DrawArc(&wave, master.X + 44.0f, master.Y + 39.0f, 35.0f, 40.0f, -62.0f, 124.0f);
+    text(graphics, localized(L"VOLUME PRINCIPAL", L"MASTER VOLUME", L"HAUPTLAUTSTÄRKE", L"主音量"),
+         RectF(master.X + 90, master.Y + 18, 280, 20), 9, accentTint(0.45), FontStyleBold);
+    text(graphics, g_audioEndpoint.muted
+             ? localized(L"Son coupé", L"Sound muted", L"Ton stumm", L"已静音")
+             : localized(L"Sortie audio Windows", L"Windows audio output", L"Windows-Audioausgabe", L"Windows 音频输出"),
+         RectF(master.X + 90, master.Y + 41, 300, 28), 18, primaryTextColor(), FontStyleBold);
+    const int masterPercent = static_cast<int>(std::lround(g_audioEndpoint.volume * 100.0f));
+    text(graphics, std::to_wstring(masterPercent) + L" %",
+         RectF(master.GetRight() - 260, master.Y + 22, 92, 22), 11,
+         g_audioEndpoint.muted ? Color(255, 242, 119, 136) : accentTint(0.48), FontStyleBold, StringAlignmentFar);
+    drawSlider(graphics, RectF(master.X + 90, master.Y + 82, master.Width - 282, 25),
+               masterPercent, 0, Action::AudioMasterVolume);
+    drawButton(graphics, RectF(master.GetRight() - 154, master.Y + 68, 132, 40),
+               g_audioEndpoint.muted ? localized(L"Réactiver", L"Unmute", L"Ton an", L"取消静音")
+                                     : localized(L"Couper", L"Mute", L"Stumm", L"静音"),
+               g_audioEndpoint.muted, Action::AudioMasterMute);
+
+    y = master.GetBottom() + 20.0f;
+    text(graphics, localized(L"APPLICATIONS", L"APPLICATIONS", L"ANWENDUNGEN", L"应用"),
+         RectF(x, y, 240, 19), 9, secondaryTextColor(), FontStyleBold);
+    text(graphics, g_audioMixerStatus, RectF(x + 230, y, available - 230, 19), 9,
+         secondaryTextColor(), FontStyleRegular, StringAlignmentFar);
+    y += 29.0f;
+
+    if (g_audioSessions.empty()) {
+        RectF empty(x, y, available, 142.0f);
+        fillRound(graphics, empty, 19, Color(255, 27, 31, 44));
+        strokeRound(graphics, empty, 19, Color(255, 45, 52, 68));
+        SolidBrush emptyDot(accentColor(44));
+        graphics.FillEllipse(&emptyDot, RectF(empty.X + empty.Width / 2 - 27, empty.Y + 20, 54, 54));
+        text(graphics, L"♫", RectF(empty.X + empty.Width / 2 - 27, empty.Y + 20, 54, 54), 25,
+             accentTint(0.48), FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
+        text(graphics, localized(L"Lance une musique, un jeu ou une vidéo.", L"Start music, a game, or a video.",
+                                 L"Starte Musik, ein Spiel oder ein Video.", L"播放音乐、游戏或视频。"),
+             RectF(empty.X + 20, empty.Y + 82, empty.Width - 40, 23), 13, primaryTextColor(),
+             FontStyleBold, StringAlignmentCenter);
+        text(graphics, localized(L"L'application apparaîtra automatiquement ici.", L"The application will automatically appear here.",
+                                 L"Die Anwendung erscheint automatisch hier.", L"应用会自动出现在这里。"),
+             RectF(empty.X + 20, empty.Y + 108, empty.Width - 40, 18), 9, secondaryTextColor(),
+             FontStyleRegular, StringAlignmentCenter);
+        y = empty.GetBottom();
+    } else {
+        for (int index = 0; index < static_cast<int>(g_audioSessions.size()); ++index) {
+            const AudioSessionInfo& session = g_audioSessions[index];
+            RectF row(x, y, available, 82.0f);
+            fillRound(graphics, row, 17, session.active ? accentColor(18) : Color(255, 27, 31, 44));
+            strokeRound(graphics, row, 17, session.active ? accentColor(78) : Color(255, 45, 52, 68));
+            RectF icon(row.X + 17, row.Y + 17, 48, 48);
+            fillRound(graphics, icon, 14, session.active ? accentColor(55) : Color(255, 37, 43, 58));
+            strokeRound(graphics, icon, 14, session.active ? accentColor(118) : Color(255, 56, 64, 82));
+            std::wstring initials;
+            for (wchar_t character : session.displayName) {
+                if (std::iswalnum(character)) {
+                    initials.push_back(static_cast<wchar_t>(std::towupper(character)));
+                    if (initials.size() == 2) break;
+                }
+            }
+            if (initials.empty()) initials = L"♪";
+            text(graphics, initials, icon, 12, session.active ? accentTint(0.55) : secondaryTextColor(),
+                 FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
+            text(graphics, session.displayName, RectF(row.X + 80, row.Y + 14, 226, 23), 12,
+                 primaryTextColor(), FontStyleBold);
+            const std::wstring detail = session.systemSounds
+                ? localized(L"Sons de Windows", L"Windows system sounds", L"Windows-Systemklänge", L"Windows 系统声音")
+                : (session.executable.empty() ? localized(L"Application audio", L"Audio application", L"Audio-Anwendung", L"音频应用")
+                                              : session.executable);
+            text(graphics, detail, RectF(row.X + 80, row.Y + 42, 226, 18), 8, secondaryTextColor());
+            SolidBrush activeDot(session.active ? Color(255, 84, 224, 168) : Color(255, 91, 102, 126));
+            graphics.FillEllipse(&activeDot, RectF(row.X + 80, row.Y + 65, 6, 6));
+            text(graphics, session.active ? localized(L"EN COURS", L"PLAYING", L"AKTIV", L"播放中")
+                                          : localized(L"EN ATTENTE", L"IDLE", L"INAKTIV", L"空闲"),
+                 RectF(row.X + 92, row.Y + 58, 120, 18), 7,
+                 session.active ? Color(255, 96, 224, 177) : secondaryTextColor(), FontStyleBold);
+
+            const float controlX = row.X + 322.0f;
+            const float muteWidth = 104.0f;
+            const float controlWidth = std::max(150.0f, row.Width - 322.0f - muteWidth - 42.0f);
+            const int percent = static_cast<int>(std::lround(session.volume * 100.0f));
+            text(graphics, std::to_wstring(percent) + L" %",
+                 RectF(controlX, row.Y + 13, controlWidth, 20), 9,
+                 session.muted ? Color(255, 242, 119, 136) : accentTint(0.45), FontStyleBold, StringAlignmentFar);
+            drawSlider(graphics, RectF(controlX, row.Y + 38, controlWidth, 24), percent, 0, Action::AudioVolume, index);
+            drawButton(graphics, RectF(row.GetRight() - muteWidth - 18, row.Y + 22, muteWidth, 38),
+                       session.muted ? localized(L"Réactiver", L"Unmute", L"Ton an", L"取消静音")
+                                     : localized(L"Couper", L"Mute", L"Stumm", L"静音"),
+                       session.muted, Action::AudioMute, index);
+            y = row.GetBottom() + 10.0f;
+        }
+    }
+    g_maxScroll = std::max(0.0f, y + g_scrollOffset + 24.0f - height);
+}
+
 void drawSettings(Graphics& graphics, int width, int height, float originY) {
     const float x = kSidebarWidth + 32.0f;
     const float available = width - x - 32.0f;
@@ -8367,6 +8868,43 @@ void drawSettings(Graphics& graphics, int width, int height, float originY) {
                   g_reduceMotion, Action::ToggleReduceMotion);
 
     y = preferenceCard.GetBottom() + 18;
+    RectF performanceCard(x, y, available, 222);
+    fillRound(graphics, performanceCard, 18, Color(255, 28, 32, 45));
+    strokeRound(graphics, performanceCard, 18, g_performanceOverlayEnabled ? accentColor(145) : Color(255, 39, 45, 61),
+                g_performanceOverlayEnabled ? 1.4f : 1.0f);
+    text(graphics, localized(L"Superposition de performances", L"Performance overlay", L"Leistungsanzeige", L"性能叠加层"),
+         RectF(performanceCard.X + 20, performanceCard.Y + 17, 330, 23), 15, Color::White, FontStyleBold);
+    text(graphics, localized(L"Affiche une petite fenêtre transparente au-dessus du jeu, sans bloquer les clics.",
+                             L"Show a small transparent window above your game without blocking clicks.",
+                             L"Zeige ein kleines transparentes Fenster über dem Spiel, ohne Klicks zu blockieren.",
+                             L"在游戏上方显示透明小窗口，不会阻挡点击。"),
+         RectF(performanceCard.X + 20, performanceCard.Y + 42, performanceCard.Width - 40, 18), 9, secondaryTextColor());
+    compactToggle(RectF(performanceCard.X + 20, performanceCard.Y + 70, performanceCard.Width - 40, 42),
+                  localized(L"Afficher sur l'écran", L"Show on screen", L"Auf dem Bildschirm anzeigen", L"显示在屏幕上"),
+                  g_performanceOverlayEnabled, Action::TogglePerformanceOverlay);
+    text(graphics, localized(L"Métriques visibles", L"Visible metrics", L"Sichtbare Messwerte", L"显示指标"),
+         RectF(performanceCard.X + 20, performanceCard.Y + 126, 180, 18), 9, secondaryTextColor(), FontStyleBold);
+    const struct {
+        const wchar_t* label[4];
+        bool* enabled;
+        Action action;
+    } performanceChoices[] = {
+        {{L"FPS", L"FPS", L"FPS", L"FPS"}, &g_performanceShowFps, Action::TogglePerformanceFps},
+        {{L"CPU", L"CPU", L"CPU", L"CPU"}, &g_performanceShowCpu, Action::TogglePerformanceCpu},
+        {{L"GPU", L"GPU", L"GPU", L"GPU"}, &g_performanceShowGpu, Action::TogglePerformanceGpu},
+        {{L"RAM", L"RAM", L"RAM", L"内存"}, &g_performanceShowMemory, Action::TogglePerformanceMemory},
+        {{L"Ventilos", L"Fans", L"Lüfter", L"风扇"}, &g_performanceShowFans, Action::TogglePerformanceFans}
+    };
+    const float metricGap = 8.0f;
+    const float metricWidth = (performanceCard.Width - 40.0f - metricGap * 4.0f) / 5.0f;
+    for (int index = 0; index < static_cast<int>(std::size(performanceChoices)); ++index) {
+        drawButton(graphics, RectF(performanceCard.X + 20.0f + index * (metricWidth + metricGap), performanceCard.Y + 151,
+                                   metricWidth, 42), localized(performanceChoices[index].label[0], performanceChoices[index].label[1],
+                                                               performanceChoices[index].label[2], performanceChoices[index].label[3]),
+                   *performanceChoices[index].enabled, performanceChoices[index].action);
+    }
+
+    y = performanceCard.GetBottom() + 18;
     RectF windowsCard(x, y, available, 200);
     fillRound(graphics, windowsCard, 18, Color(255, 28, 32, 45));
     strokeRound(graphics, windowsCard, 18, Color(255, 39, 45, 61));
@@ -8548,6 +9086,246 @@ void drawSettings(Graphics& graphics, int width, int height, float originY) {
              Color(255, 105, 221, 178), FontStyleBold);
     }
     g_maxScroll = std::max(0.0f, dataCard.GetBottom() + g_scrollOffset + 52 - height);
+}
+
+void drawPcSessions(Graphics& graphics, int width, int height, float originY) {
+    const float x = kSidebarWidth + 32.0f;
+    const float available = width - x - 32.0f;
+    const float gap = 16.0f;
+    const int ram = memoryLoadPercent();
+    const double hottest = std::max(g_cpuTemperature, g_gpuTemperature);
+    const bool sessionActive = g_pcSession != PcSession::None;
+
+    drawPageIntro(graphics, x, originY, std::max(320.0f, available - 300.0f),
+                  localized(L"SESSIONS PC", L"PC SESSIONS", L"PC-SITZUNGEN", L"电脑会话"),
+                  localized(L"Un bouton, et ton PC est prêt.", L"One button, and your PC is ready.",
+                            L"Ein Klick, und dein PC ist bereit.", L"一键让电脑准备就绪。"));
+    drawButton(graphics, RectF(width - 188.0f, originY + 12, 150, 40),
+               localized(L"Paramètres Windows", L"Windows settings", L"Windows-Einstellungen", L"Windows 设置"),
+               false, Action::OpenGameModeSettings);
+
+    float y = originY + 84.0f;
+    const float heroWidth = available * 0.58f;
+    RectF hero(x, y, heroWidth, 154);
+    fillRound(graphics, hero, 21, Color(255, 27, 31, 44));
+    strokeRound(graphics, hero, 21, sessionActive ? accentColor(175) : Color(255, 47, 54, 71),
+                sessionActive ? 1.5f : 1.0f);
+    LinearGradientBrush heroGlow(PointF(hero.X, hero.Y), PointF(hero.GetRight(), hero.GetBottom()),
+                                 accentColor(sessionActive ? 45 : 20), Color(0, 0, 0, 0));
+    GraphicsPath heroPath;
+    roundedPath(heroPath, hero, 21);
+    graphics.FillPath(&heroGlow, &heroPath);
+    text(graphics, sessionActive ? localized(L"SESSION EN COURS", L"ACTIVE SESSION", L"AKTIVE SITZUNG", L"当前会话")
+                                 : localized(L"CENTRE DE PRÉPARATION", L"SESSION CENTER", L"SITZUNGSZENTRALE", L"会话中心"),
+         RectF(hero.X + 22, hero.Y + 18, 260, 17), 9, accentTint(0.46), FontStyleBold);
+    text(graphics, sessionActive ? pcSessionName(g_pcSession)
+                                 : localized(L"Choisis ton activité", L"Choose your activity", L"Aktivität auswählen", L"选择你的活动"),
+         RectF(hero.X + 22, hero.Y + 43, hero.Width - 205, 32), 22, primaryTextColor(), FontStyleBold);
+    const std::wstring heroDetail = sessionActive
+        ? (g_sessionStatus.empty()
+               ? localized(L"Les réglages restent appliqués jusqu'à l'arrêt de la session.",
+                           L"Settings stay applied until the session is stopped.",
+                           L"Die Einstellungen bleiben bis zum Sitzungsende aktiv.",
+                           L"设置将保持启用，直到会话结束。")
+               : g_sessionStatus)
+        : localized(L"RGBCcontrol prépare l'alimentation, la ventilation, la manette et les applications, puis restaure tout à la fin.",
+                    L"RGBCcontrol prepares power, cooling, controller, and apps, then restores everything at the end.",
+                    L"RGBCcontrol bereitet Energie, Kühlung, Controller und Apps vor und stellt danach alles wieder her.",
+                    L"RGBCcontrol 会准备电源、散热、手柄和应用，并在结束时恢复所有设置。 ");
+    textWrapped(graphics, heroDetail, RectF(hero.X + 22, hero.Y + 80, hero.Width - 220, 52), 9, secondaryTextColor());
+    if (sessionActive) {
+        drawButton(graphics, RectF(hero.GetRight() - 174, hero.Y + 48, 150, 52),
+                   localized(L"Arrêter et restaurer", L"Stop and restore", L"Stoppen & zurück", L"停止并恢复"),
+                   false, Action::StopPcSession);
+    } else {
+        text(graphics, localized(L"Aucune modification permanente", L"No permanent changes", L"Keine dauerhaften Änderungen", L"不会永久修改"),
+             RectF(hero.GetRight() - 190, hero.Y + 58, 166, 36), 9, Color(255, 102, 224, 177),
+             FontStyleBold, StringAlignmentCenter, StringAlignmentCenter);
+    }
+    SolidBrush activeDot(sessionActive ? Color(255, 86, 225, 167) : Color(255, 112, 122, 145));
+    graphics.FillEllipse(&activeDot, RectF(hero.X + 22, hero.GetBottom() - 21, 7, 7));
+    text(graphics, sessionActive
+             ? localized(L"Restauration automatique à la fermeture de l'application principale", L"Automatic restore when the main app closes",
+                         L"Automatische Wiederherstellung beim Schließen der Haupt-App", L"主应用关闭时自动恢复")
+             : localized(L"Tout est traité localement sur ce PC", L"Everything is processed locally on this PC",
+                         L"Alles wird lokal auf diesem PC verarbeitet", L"所有操作均在本机完成"),
+         RectF(hero.X + 37, hero.GetBottom() - 27, hero.Width - 58, 19), 8, secondaryTextColor());
+
+    RectF options(hero.GetRight() + gap, y, available - heroWidth - gap, hero.Height);
+    fillRound(graphics, options, 21, Color(255, 27, 31, 44));
+    strokeRound(graphics, options, 21, Color(255, 47, 54, 71));
+    text(graphics, localized(L"Ce que la session prépare", L"What the session prepares", L"Was vorbereitet wird", L"会话准备内容"),
+         RectF(options.X + 18, options.Y + 15, options.Width - 36, 22), 13, primaryTextColor(), FontStyleBold);
+    auto compactOption = [&](float ox, float oy, float ow, const std::wstring& label, bool enabled, Action action) {
+        RectF rect(ox, oy, ow, 41);
+        fillRound(graphics, rect, 11, enabled ? accentColor(24) : Color(255, 22, 26, 37));
+        strokeRound(graphics, rect, 11, enabled ? accentColor(92) : Color(255, 42, 48, 63));
+        SolidBrush dot(enabled ? Color(255, 86, 225, 167) : Color(255, 94, 103, 124));
+        graphics.FillEllipse(&dot, RectF(rect.X + 12, rect.Y + 17, 7, 7));
+        text(graphics, label, RectF(rect.X + 27, rect.Y, rect.Width - 41, rect.Height), 9,
+             primaryTextColor(), FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
+        addHit(rect, action);
+    };
+    const float optionWidth = (options.Width - 46) / 2.0f;
+    compactOption(options.X + 18, options.Y + 50, optionWidth,
+                  localized(L"Alimentation", L"Power", L"Energie", L"电源"), g_sessionPowerEnabled, Action::ToggleSessionPower);
+    compactOption(options.X + 28 + optionWidth, options.Y + 50, optionWidth,
+                  localized(L"Ventilation", L"Cooling", L"Kühlung", L"散热"), g_sessionCoolingEnabled, Action::ToggleSessionCooling);
+    compactOption(options.X + 18, options.Y + 101, optionWidth,
+                  localized(L"Manette", L"Controller", L"Controller", L"手柄"), g_sessionGamepadEnabled, Action::ToggleSessionGamepad);
+    compactOption(options.X + 28 + optionWidth, options.Y + 101, optionWidth,
+                  localized(L"Applications", L"Applications", L"Anwendungen", L"应用"), g_sessionLaunchAppsEnabled, Action::ToggleSessionLaunchApps);
+
+    y = hero.GetBottom() + 18.0f;
+    text(graphics, localized(L"Choisir une session", L"Choose a session", L"Sitzung auswählen", L"选择会话"),
+         RectF(x, y, 280, 22), 14, primaryTextColor(), FontStyleBold);
+    y += 31.0f;
+    const float modeWidth = (available - gap * 3.0f) / 4.0f;
+    struct ModeCard {
+        PcSession session;
+        const wchar_t* description;
+        const wchar_t* power;
+        Color color;
+    } modes[] = {
+        {PcSession::Gaming, localized(L"Priorité au jeu et à la manette", L"Game and controller priority", L"Priorität für Spiel und Controller", L"优先游戏和手柄"),
+         localized(L"Haute performance", L"High performance", L"Höchstleistung", L"高性能"), Color(255, 120, 92, 255)},
+        {PcSession::Work, localized(L"Calme, stable et concentré", L"Quiet, stable, and focused", L"Leise, stabil und fokussiert", L"安静、稳定、专注"),
+         localized(L"Équilibré", L"Balanced", L"Ausgeglichen", L"平衡"), Color(255, 48, 176, 218)},
+        {PcSession::Streaming, localized(L"Ressources pour la diffusion", L"Resources for broadcasting", L"Ressourcen für Streaming", L"为直播分配资源"),
+         localized(L"Performance + refroidissement", L"Performance + cooling", L"Leistung + Kühlung", L"性能 + 散热"), Color(255, 245, 94, 148)},
+        {PcSession::Night, localized(L"Silencieux et économe", L"Quiet and power-saving", L"Leise und sparsam", L"安静且节能"),
+         localized(L"Économie d'énergie", L"Power saver", L"Energiesparen", L"节能"), Color(255, 87, 211, 166)}
+    };
+    for (int index = 0; index < 4; ++index) {
+        const ModeCard& mode = modes[index];
+        RectF card(x + index * (modeWidth + gap), y, modeWidth, 146);
+        const bool active = g_pcSession == mode.session;
+        fillRound(graphics, card, 17, active ? Color(255, 36, 34, 58) : Color(255, 27, 31, 44));
+        strokeRound(graphics, card, 17, active ? mode.color : Color(255, 45, 52, 68), active ? 1.6f : 1.0f);
+        SolidBrush mark(mode.color);
+        graphics.FillEllipse(&mark, RectF(card.X + 17, card.Y + 17, 10, 10));
+        text(graphics, pcSessionName(mode.session), RectF(card.X + 36, card.Y + 10, card.Width - 52, 25), 13,
+             primaryTextColor(), FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
+        textWrapped(graphics, mode.description, RectF(card.X + 17, card.Y + 44, card.Width - 34, 34), 8, secondaryTextColor());
+        text(graphics, mode.power, RectF(card.X + 17, card.Y + 79, card.Width - 34, 17), 8, mode.color, FontStyleBold);
+        drawButton(graphics, RectF(card.X + 17, card.GetBottom() - 40, card.Width - 34, 30),
+                   active ? localized(L"En cours", L"Active", L"Aktiv", L"进行中")
+                          : localized(L"Démarrer", L"Start", L"Starten", L"开始"),
+                   active, Action::StartPcSession, static_cast<int>(mode.session), !active);
+    }
+
+    y += 164.0f;
+    const float monitorWidth = available * 0.38f;
+    RectF monitor(x, y, monitorWidth, 176);
+    fillRound(graphics, monitor, 18, Color(255, 27, 31, 44));
+    strokeRound(graphics, monitor, 18, Color(255, 45, 52, 68));
+    text(graphics, localized(L"État en direct", L"Live status", L"Live-Status", L"实时状态"),
+         RectF(monitor.X + 18, monitor.Y + 15, monitor.Width - 36, 22), 14, primaryTextColor(), FontStyleBold);
+    drawButton(graphics, RectF(monitor.GetRight() - 104, monitor.Y + 10, 86, 28), L"FPS", false, Action::OpenGameBar);
+    struct LiveMetric { std::wstring label; std::wstring value; bool warning; } metrics[] = {
+        {localized(L"Mémoire", L"Memory", L"Arbeitsspeicher", L"内存"), ram >= 0 ? std::to_wstring(ram) + L" %" : L"--", ram >= 85},
+        {localized(L"CPU", L"CPU", L"CPU", L"CPU"), g_cpuTemperature >= 0 ? std::to_wstring(static_cast<int>(std::lround(g_cpuTemperature))) + L" °C" : L"--", g_cpuTemperature >= 85},
+        {localized(L"GPU", L"GPU", L"GPU", L"GPU"), g_gpuTemperature >= 0 ? std::to_wstring(static_cast<int>(std::lround(g_gpuTemperature))) + L" °C" : L"--", g_gpuTemperature >= 85},
+        {localized(L"Ventilateurs", L"Fans", L"Lüfter", L"风扇"), std::to_wstring(g_fans.size()), g_fans.empty()}
+    };
+    for (int index = 0; index < 4; ++index) {
+        const float metricX = monitor.X + 18 + (index % 2) * ((monitor.Width - 44) / 2.0f + 8);
+        const float metricY = monitor.Y + 49 + (index / 2) * 57.0f;
+        RectF metric(metricX, metricY, (monitor.Width - 44) / 2.0f, 47);
+        fillRound(graphics, metric, 11, Color(255, 20, 24, 35));
+        text(graphics, metrics[index].label, RectF(metric.X + 11, metric.Y + 6, metric.Width - 22, 15), 8, secondaryTextColor());
+        text(graphics, metrics[index].value, RectF(metric.X + 11, metric.Y + 21, metric.Width - 22, 20), 12,
+             metrics[index].warning ? Color(255, 244, 104, 119) : primaryTextColor(), FontStyleBold);
+    }
+
+    RectF advice(monitor.GetRight() + gap, y, available - monitorWidth - gap, monitor.Height);
+    fillRound(graphics, advice, 18, Color(255, 27, 31, 44));
+    strokeRound(graphics, advice, 18, Color(255, 45, 52, 68));
+    text(graphics, localized(L"Conseil du moment", L"Current recommendation", L"Aktuelle Empfehlung", L"当前建议"),
+         RectF(advice.X + 20, advice.Y + 16, advice.Width - 40, 22), 14, primaryTextColor(), FontStyleBold);
+    std::wstring adviceText;
+    Color adviceColor(255, 102, 224, 177);
+    if (hottest >= 85.0) {
+        adviceText = localized(L"La température est élevée. Utilise la session Streaming ou Performance et vérifie les entrées d'air.",
+                               L"Temperature is high. Use Streaming or Performance mode and check airflow.",
+                               L"Die Temperatur ist hoch. Streaming oder Leistung wählen und Luftstrom prüfen.",
+                               L"温度较高，请使用直播或性能模式并检查风道。 ");
+        adviceColor = Color(255, 244, 104, 119);
+    } else if (ram >= 85) {
+        adviceText = localized(L"La mémoire est presque saturée. Ferme les applications inutiles avant de lancer une session Jeu.",
+                               L"Memory is nearly full. Close unused apps before starting Gaming mode.",
+                               L"Der Speicher ist fast voll. Vor Gaming unnötige Apps schließen.",
+                               L"内存即将用满，开始游戏会话前请关闭不需要的应用。 ");
+        adviceColor = Color(255, 242, 181, 92);
+    } else if (g_fans.empty()) {
+        adviceText = localized(L"Aucun ventilateur n'est exposé à Windows. Les sessions fonctionneront, mais sans réglage automatique du refroidissement.",
+                               L"No fan is exposed to Windows. Sessions still work, but cooling cannot be adjusted automatically.",
+                               L"Windows erkennt keinen Lüfter. Sitzungen funktionieren, aber ohne automatische Kühlung.",
+                               L"Windows 未检测到风扇；会话仍可运行，但无法自动调节散热。 ");
+        adviceColor = Color(255, 242, 181, 92);
+    } else {
+        adviceText = localized(L"Le PC est prêt. Configure l'application principale ci-dessous pour arrêter et restaurer automatiquement la session.",
+                               L"The PC is ready. Set the main app below to stop and restore the session automatically.",
+                               L"Der PC ist bereit. Haupt-App unten festlegen, um die Sitzung automatisch zu beenden und wiederherzustellen.",
+                               L"电脑已准备就绪。请在下方设置主应用，以便自动停止会话并恢复设置。 ");
+    }
+    SolidBrush adviceDot(adviceColor);
+    graphics.FillEllipse(&adviceDot, RectF(advice.X + 21, advice.Y + 54, 10, 10));
+    textWrapped(graphics, adviceText, RectF(advice.X + 43, advice.Y + 48, advice.Width - 63, 66), 10, secondaryTextColor());
+    text(graphics, localized(L"Aucune application n'est fermée sans ton action.", L"No application is closed without your action.",
+                             L"Keine Anwendung wird ohne deine Aktion geschlossen.", L"未经你的操作不会关闭任何应用。"),
+         RectF(advice.X + 20, advice.GetBottom() - 36, advice.Width - 40, 18), 8, adviceColor, FontStyleBold);
+
+    y = monitor.GetBottom() + 18.0f;
+    RectF applications(x, y, available, 218);
+    fillRound(graphics, applications, 18, Color(255, 27, 31, 44));
+    strokeRound(graphics, applications, 18, Color(255, 45, 52, 68));
+    text(graphics, localized(L"Applications de la session", L"Session applications", L"Sitzungsanwendungen", L"会话应用"),
+         RectF(applications.X + 20, applications.Y + 16, 330, 22), 14, primaryTextColor(), FontStyleBold);
+    text(graphics, localized(L"La première application arrête automatiquement la session lorsqu'elle se ferme.",
+                             L"The first application automatically ends the session when it closes.",
+                             L"Die erste Anwendung beendet die Sitzung automatisch beim Schließen.",
+                             L"第一个应用关闭时会自动结束会话。"),
+         RectF(applications.X + 20, applications.Y + 42, applications.Width - 40, 18), 9, secondaryTextColor());
+    for (int index = 0; index < 3; ++index) {
+        RectF row(applications.X + 20, applications.Y + 70 + index * 46.0f, applications.Width - 40, 38);
+        fillRound(graphics, row, 11, Color(255, 20, 24, 35));
+        text(graphics, index == 0 ? localized(L"PRINCIPALE", L"PRIMARY", L"HAUPT-APP", L"主要")
+                                  : localized(L"À LANCER", L"LAUNCH", L"STARTEN", L"启动"),
+             RectF(row.X + 12, row.Y, 82, row.Height), 8, index == 0 ? accentTint(0.45) : secondaryTextColor(),
+             FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
+        const std::wstring label = g_sessionApplications[index].empty()
+            ? localized(L"Aucune application choisie", L"No application selected", L"Keine Anwendung gewählt", L"未选择应用")
+            : fs::path(g_sessionApplications[index]).filename().wstring();
+        text(graphics, label, RectF(row.X + 101, row.Y, row.Width - 300, row.Height), 9,
+             g_sessionApplications[index].empty() ? secondaryTextColor() : primaryTextColor(),
+             g_sessionApplications[index].empty() ? FontStyleRegular : FontStyleBold,
+             StringAlignmentNear, StringAlignmentCenter);
+        drawButton(graphics, RectF(row.GetRight() - 188, row.Y + 4, 100, 30),
+                   localized(L"Choisir", L"Choose", L"Wählen", L"选择"), false, Action::SessionBindApplication, index);
+        drawButton(graphics, RectF(row.GetRight() - 80, row.Y + 4, 68, 30),
+                   localized(L"Effacer", L"Clear", L"Leeren", L"清除"), false, Action::SessionClearApplication, index,
+                   !g_sessionApplications[index].empty());
+    }
+
+    y = applications.GetBottom() + 18.0f;
+    RectF windowsTools(x, y, available, 92);
+    fillRound(graphics, windowsTools, 17, Color(255, 27, 31, 44));
+    strokeRound(graphics, windowsTools, 17, Color(255, 45, 52, 68));
+    text(graphics, localized(L"Réglages Windows fiables", L"Reliable Windows controls", L"Zuverlässige Windows-Steuerung", L"可靠的 Windows 控制"),
+         RectF(windowsTools.X + 20, windowsTools.Y + 14, 300, 22), 13, primaryTextColor(), FontStyleBold);
+    text(graphics, localized(L"Choisis ton casque, ton micro ou Ne pas déranger depuis les pages officielles de Windows.",
+                             L"Choose your headset, microphone, or Do Not Disturb from official Windows pages.",
+                             L"Headset, Mikrofon oder Nicht stören in den offiziellen Windows-Seiten wählen.",
+                             L"通过 Windows 官方页面选择耳机、麦克风或勿扰模式。"),
+         RectF(windowsTools.X + 20, windowsTools.Y + 42, windowsTools.Width - 475, 34), 9, secondaryTextColor());
+    drawButton(graphics, RectF(windowsTools.GetRight() - 441, windowsTools.Y + 27, 132, 40),
+               localized(L"Son et micro", L"Sound & mic", L"Ton & Mikro", L"声音和麦克风"), false, Action::OpenSoundSettings);
+    drawButton(graphics, RectF(windowsTools.GetRight() - 297, windowsTools.Y + 27, 132, 40),
+               localized(L"Ne pas déranger", L"Do Not Disturb", L"Nicht stören", L"勿扰模式"), false, Action::OpenFocusSettings);
+    drawButton(graphics, RectF(windowsTools.GetRight() - 153, windowsTools.Y + 27, 133, 40),
+               localized(L"Mode Jeu", L"Game Mode", L"Spielmodus", L"游戏模式"), false, Action::OpenGameModeSettings);
+    g_maxScroll = std::max(0.0f, windowsTools.GetBottom() + g_scrollOffset + 22.0f - height);
 }
 
 void drawSmartHub(Graphics& graphics, int width, int height, float originY) {
@@ -9127,6 +9905,193 @@ double launchElapsedMs() {
                                    : static_cast<double>(GetTickCount64() - g_launchAnimationStartedAt);
 }
 
+void drawPerformanceOverlay(Graphics& graphics, int width, int /*height*/) {
+    if (!g_performanceOverlayEnabled || g_colorPickerOpen) return;
+
+    struct Metric {
+        std::wstring label;
+        std::wstring value;
+        bool warning = false;
+    };
+    std::vector<Metric> metrics;
+    if (g_performanceShowFps) {
+        metrics.push_back({L"FPS", g_uiFps > 0.0 ? std::to_wstring(static_cast<int>(std::lround(g_uiFps))) : L"--", g_uiFps > 0.0 && g_uiFps < 30.0});
+    }
+    if (g_performanceShowCpu) {
+        const int load = systemCpuLoadPercent();
+        std::wstring value = load >= 0 ? std::to_wstring(load) + L" %" : L"--";
+        if (g_cpuTemperature >= 0) value += L" · " + std::to_wstring(static_cast<int>(std::lround(g_cpuTemperature))) + L" °C";
+        metrics.push_back({L"CPU", value, load >= 90 || g_cpuTemperature >= 85});
+    }
+    if (g_performanceShowGpu) {
+        const std::wstring value = g_gpuTemperature >= 0
+            ? std::to_wstring(static_cast<int>(std::lround(g_gpuTemperature))) + L" °C" : L"--";
+        metrics.push_back({L"GPU", value, g_gpuTemperature >= 85});
+    }
+    if (g_performanceShowMemory) {
+        const int memory = memoryLoadPercent();
+        metrics.push_back({localized(L"RAM", L"RAM", L"RAM", L"内存"), memory >= 0 ? std::to_wstring(memory) + L" %" : L"--", memory >= 85});
+    }
+    if (g_performanceShowFans) {
+        double totalRpm = 0.0;
+        int rpmCount = 0;
+        for (const FanDevice& fan : g_fans) {
+            if (fan.rpm < 0) continue;
+            totalRpm += fan.rpm;
+            ++rpmCount;
+        }
+        const std::wstring value = rpmCount > 0
+            ? std::to_wstring(static_cast<int>(std::lround(totalRpm / rpmCount))) + L" RPM" : L"--";
+        metrics.push_back({localized(L"Ventilos", L"Fans", L"Lüfter", L"风扇"), value, false});
+    }
+
+    const float panelWidth = 232.0f;
+    const float panelHeight = 53.0f + std::max(1, static_cast<int>(metrics.size())) * 21.0f;
+    const float panelX = g_performanceOverlayExternalRendering
+        ? 0.0f
+        : std::max(static_cast<float>(kSidebarWidth + 12), static_cast<float>(width) - panelWidth - 20.0f);
+    const float panelY = g_performanceOverlayExternalRendering ? 0.0f : static_cast<float>(kHeaderHeight + 12);
+    const RectF panel(panelX, panelY, panelWidth, panelHeight);
+    // The same panel is rendered in a separate layered window.  Its alpha is
+    // deliberately below opaque so a game remains visible underneath it.
+    fillRound(graphics, panel, 15, lightTheme() ? Color(168, 255, 255, 255) : Color(168, 19, 24, 36));
+    strokeRound(graphics, panel, 15, accentColor(175), 1.0f);
+    SolidBrush live(accentColor());
+    graphics.FillEllipse(&live, RectF(panel.X + 15, panel.Y + 15, 7, 7));
+    text(graphics, localized(L"PERFORMANCES", L"PERFORMANCE", L"LEISTUNG", L"性能"),
+         RectF(panel.X + 29, panel.Y + 8, panel.Width - 45, 20), 9, primaryTextColor(), FontStyleBold);
+    text(graphics, localized(L"en direct", L"live", L"live", L"实时"),
+         RectF(panel.X + panel.Width - 58, panel.Y + 8, 43, 20), 7.5f, accentTint(0.45),
+         FontStyleBold, StringAlignmentFar, StringAlignmentCenter);
+
+    if (metrics.empty()) {
+        text(graphics, localized(L"Aucune métrique sélectionnée", L"No metrics selected", L"Keine Metrik ausgewählt", L"未选择指标"),
+             RectF(panel.X + 15, panel.Y + 33, panel.Width - 30, 18), 8.5f, secondaryTextColor());
+        return;
+    }
+    for (std::size_t index = 0; index < metrics.size(); ++index) {
+        const Metric& metric = metrics[index];
+        const float rowY = panel.Y + 32.0f + static_cast<float>(index) * 21.0f;
+        text(graphics, metric.label, RectF(panel.X + 15, rowY, 72, 18), 8.5f,
+             secondaryTextColor(), FontStyleBold);
+        text(graphics, metric.value, RectF(panel.X + 82, rowY, panel.Width - 97, 18), 8.5f,
+             metric.warning ? Color(255, 255, 177, 104) : primaryTextColor(), FontStyleBold,
+             StringAlignmentFar, StringAlignmentCenter);
+    }
+}
+
+LRESULT CALLBACK performanceOverlayWindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+        case WM_NCHITTEST:
+            return HTTRANSPARENT;
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_DISPLAYCHANGE:
+            updatePerformanceOverlayWindow();
+            return 0;
+        default:
+            return DefWindowProcW(window, message, wParam, lParam);
+    }
+}
+
+bool ensurePerformanceOverlayWindow() {
+    if (g_performanceOverlayWindow && IsWindow(g_performanceOverlayWindow)) return true;
+    static bool classRegistered = false;
+    if (!classRegistered) {
+        WNDCLASSEXW overlayClass{};
+        overlayClass.cbSize = sizeof(overlayClass);
+        overlayClass.lpfnWndProc = performanceOverlayWindowProcedure;
+        overlayClass.hInstance = GetModuleHandleW(nullptr);
+        overlayClass.lpszClassName = L"RGBCcontrolPerformanceOverlay";
+        if (!RegisterClassExW(&overlayClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+        classRegistered = true;
+    }
+    g_performanceOverlayWindow = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        L"RGBCcontrolPerformanceOverlay", L"RGBCcontrol performance overlay", WS_POPUP,
+        0, 0, 1, 1, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    return g_performanceOverlayWindow != nullptr;
+}
+
+void updatePerformanceOverlayWindow() {
+    if (!g_performanceOverlayEnabled) {
+        if (g_performanceOverlayWindow && IsWindow(g_performanceOverlayWindow)) ShowWindow(g_performanceOverlayWindow, SW_HIDE);
+        return;
+    }
+    if (!ensurePerformanceOverlayWindow()) return;
+
+    HWND foreground = GetForegroundWindow();
+    if (!foreground || foreground == g_performanceOverlayWindow) foreground = g_window;
+    HMONITOR monitor = MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(MONITORINFO);
+    if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo)) return;
+    const RECT bounds = monitorInfo.rcMonitor;
+    constexpr int overlayWidth = 232;
+    constexpr int overlayHeight = 180;
+    const int left = bounds.right - overlayWidth - 20;
+    const int top = bounds.top + kHeaderHeight + 12;
+    const int width = overlayWidth;
+    const int height = overlayHeight;
+
+    BITMAPINFO bitmapInfo{};
+    bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmapInfo.bmiHeader.biWidth = width;
+    bitmapInfo.bmiHeader.biHeight = -height;
+    bitmapInfo.bmiHeader.biPlanes = 1;
+    bitmapInfo.bmiHeader.biBitCount = 32;
+    bitmapInfo.bmiHeader.biCompression = BI_RGB;
+    void* pixels = nullptr;
+    HDC screen = GetDC(nullptr);
+    HDC memory = screen ? CreateCompatibleDC(screen) : nullptr;
+    HBITMAP bitmap = memory ? CreateDIBSection(screen, &bitmapInfo, DIB_RGB_COLORS, &pixels, nullptr, 0) : nullptr;
+    if (!screen || !memory || !bitmap) {
+        if (bitmap) DeleteObject(bitmap);
+        if (memory) DeleteDC(memory);
+        if (screen) ReleaseDC(nullptr, screen);
+        return;
+    }
+    HGDIOBJ previousBitmap = SelectObject(memory, bitmap);
+    {
+        Graphics graphics(memory);
+        graphics.SetSmoothingMode(SmoothingModeAntiAlias);
+        graphics.SetInterpolationMode(InterpolationModeBilinear);
+        graphics.SetCompositingQuality(CompositingQualityHighSpeed);
+        graphics.SetCompositingMode(CompositingModeSourceCopy);
+        graphics.Clear(Color(0, 0, 0, 0));
+        graphics.SetCompositingMode(CompositingModeSourceOver);
+        const bool previousCollect = g_collectOpaqueText;
+        std::vector<DeferredTextCommand> previousText = std::move(g_deferredText);
+        g_deferredText.clear();
+        g_collectOpaqueText = true;
+        g_performanceOverlayExternalRendering = true;
+        drawPerformanceOverlay(graphics, width, height);
+        g_performanceOverlayExternalRendering = false;
+        flushDeferredText(graphics);
+        g_deferredText = std::move(previousText);
+        g_collectOpaqueText = previousCollect;
+        graphics.Flush(FlushIntentionSync);
+    }
+    POINT destination{left, top};
+    POINT source{0, 0};
+    SIZE size{width, height};
+    BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    UpdateLayeredWindow(g_performanceOverlayWindow, screen, &destination, &size, memory, &source, 0, &blend, ULW_ALPHA);
+    SelectObject(memory, previousBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+    SetWindowPos(g_performanceOverlayWindow, HWND_TOPMOST, left, top, width, height,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+void destroyPerformanceOverlayWindow() {
+    if (g_performanceOverlayWindow && IsWindow(g_performanceOverlayWindow)) DestroyWindow(g_performanceOverlayWindow);
+    g_performanceOverlayWindow = nullptr;
+}
+
 void drawApplicationScene(Graphics& graphics, int width, int height) {
     drawAnimatedBackground(graphics, width, height);
     drawHeader(graphics, width);
@@ -9148,7 +10113,9 @@ void drawApplicationScene(Graphics& graphics, int width, int height) {
     else if (g_page == Page::Profiles) drawProfiles(graphics, width, height, originY);
     else if (g_page == Page::Fans) drawFans(graphics, width, height, originY);
     else if (g_page == Page::Diagnostics) drawDiagnostics(graphics, width, height, originY);
+    else if (g_page == Page::Sessions) drawPcSessions(graphics, width, height, originY);
     else if (g_page == Page::SmartHub) drawSmartHub(graphics, width, height, originY);
+    else if (g_page == Page::AudioMixer) drawAudioMixer(graphics, width, height, originY);
     else drawSettings(graphics, width, height, originY);
     g_scrollOffset = std::clamp(g_scrollOffset, 0.0f, g_maxScroll);
 
@@ -9188,8 +10155,11 @@ void renderScene(Graphics& graphics, int width, int height) {
     const bool launching = launchAnimationActive();
     const double elapsed = launching ? launchElapsedMs() : kLaunchDurationMs;
     const double revealInterface = smoothStep(kLaunchDurationMs * 0.80, kLaunchDurationMs, elapsed);
-    if (!launching || revealInterface > 0.001) drawApplicationScene(graphics, width, height);
-    else drawAnimatedBackground(graphics, width, height);
+    if (!launching || revealInterface > 0.001) {
+        drawApplicationScene(graphics, width, height);
+    } else {
+        drawAnimatedBackground(graphics, width, height);
+    }
     flushDeferredText(graphics);
     if (launching) drawLaunchAnimation(graphics, width, height, elapsed, 1.0 - revealInterface);
     flushDeferredText(graphics);
@@ -9209,6 +10179,17 @@ void paint(HWND window) {
     Bitmap buffer(width, height, PixelFormat32bppPARGB);
     Graphics graphics(&buffer);
     const ULONGLONG now = GetTickCount64();
+    if (g_lastPaintAt != 0) {
+        const ULONGLONG elapsed = now - g_lastPaintAt;
+        // Ignore deliberate idle refreshes (the overlay refreshes twice per
+        // second) so the indicator reflects active rendering rather than
+        // reporting a misleading 2 FPS while the window is idle.
+        if (elapsed > 0 && elapsed <= 100) {
+            const double instantFps = 1000.0 / static_cast<double>(elapsed);
+            g_uiFps = g_uiFps <= 0.0 ? instantFps : g_uiFps * 0.82 + instantFps * 0.18;
+        }
+    }
+    g_lastPaintAt = now;
     const bool fastGamepadFrame = g_gamepadFastPaintRequested && g_page == Page::Gamepads &&
                                   !g_colorPickerOpen && !launchAnimationActive() &&
                                   g_gamepadPageCache && g_gamepadPageCache->GetLastStatus() == Ok &&
@@ -9297,6 +10278,13 @@ void seedCaptureData() {
                          L"Alle kompatiblen Controller sind bereit.", L"所有兼容控制器均已就绪。");
     g_cpuTemperature = 53;
     g_gpuTemperature = 43;
+    g_performanceOverlayEnabled = false;
+    g_performanceShowFps = true;
+    g_performanceShowCpu = true;
+    g_performanceShowGpu = true;
+    g_performanceShowMemory = true;
+    g_performanceShowFans = true;
+    g_uiFps = 60.0;
     g_fans.clear();
     for (int index = 0; index < 7; ++index) {
         FanDevice fan;
@@ -9332,6 +10320,10 @@ void seedCaptureData() {
     g_profiles[1].curveSpeeds = {30, 35, 55, 80};
     g_activeProfile = 0;
     g_profileApplications = {L"C:\\Games\\Aurora\\Aurora.exe", L"C:\\Games\\NightRun\\NightRun.exe", L""};
+    g_sessionApplications = {L"C:\\Games\\Aurora\\Aurora.exe", L"C:\\Apps\\Discord\\Discord.exe", L""};
+    g_pcSession = PcSession::None;
+    g_sessionStatus.clear();
+    g_sessionPowerEnabled = g_sessionCoolingEnabled = g_sessionGamepadEnabled = g_sessionLaunchAppsEnabled = true;
     g_applicationProfilesEnabled = true;
     g_globalHotkeysEnabled = true;
     g_sleepLightsEnabled = true;
@@ -9753,6 +10745,10 @@ int runSelfTests(const fs::path& destination) {
     const std::uint32_t previewFirst = gamepadLightingPreviewRgb(2000);
     const std::uint32_t previewSecond = gamepadLightingPreviewRgb(4500);
     const bool gamepadAnimatedLightingPreview = previewFirst != previewSecond;
+    const int testedMemoryLoad = memoryLoadPercent();
+    const bool pcSessionHelpers = testedMemoryLoad >= 0 && testedMemoryLoad <= 100 &&
+                                  std::wstring(pcSessionName(PcSession::Gaming)) !=
+                                      std::wstring(pcSessionName(PcSession::Night));
     g_baseColor = savedBaseColor;
     g_brightness = savedBrightness;
     g_effectActive = savedEffectActive;
@@ -9766,7 +10762,7 @@ int runSelfTests(const fs::path& destination) {
            colorOrderPermutations && dualSenseUsbInput && dualSenseBluetoothInput && dualSenseBluetoothEnhancedInput &&
            dualSenseBluetoothBodyInput && dualSenseBluetoothEnhancedBodyInput && dualSenseBluetoothPaddedInput &&
            dualSenseComponentsReady && dualSenseDpadRight && layeredDualSenseControls && measuredTouchpadLights &&
-           gamepadAnimatedLightingPreview && certificationIdentity ? 0 : 21;
+           gamepadAnimatedLightingPreview && certificationIdentity && pcSessionHelpers ? 0 : 21;
 }
 
 int createInterfaceCaptures(const fs::path& destination) {
@@ -9787,6 +10783,33 @@ int createInterfaceCaptures(const fs::path& destination) {
     g_systemNotificationsEnabled = true;
     syncSetupPlacements();
     ok = savePageCapture(Page::SmartHub, 1180, 760, destination / L"smart-hub.png") && ok;
+    g_audioEndpoint = {0.68f, false};
+    g_audioSessions = {
+        {4232, L"spotify.exe", L"Spotify", 0.74f, false, true, false},
+        {9180, L"Discord.exe", L"Discord", 0.42f, false, true, false},
+        {11704, L"chrome.exe", L"Google Chrome", 0.55f, true, false, false},
+        {0, L"SystemSounds", localized(L"Sons système", L"System sounds", L"Systemklänge", L"系统声音"), 0.86f, false, false, true}
+    };
+    g_audioMixerStatus = localized(L"4 applications audio détectées", L"4 audio applications detected",
+                                   L"4 Audio-Anwendungen erkannt", L"检测到 4 个音频应用");
+    ok = savePageCapture(Page::AudioMixer, 1180, 760, destination / L"audio-mixer.png") && ok;
+    g_performanceOverlayEnabled = true;
+    g_performanceShowFps = true;
+    g_performanceShowCpu = true;
+    g_performanceShowGpu = true;
+    g_performanceShowMemory = true;
+    g_performanceShowFans = true;
+    g_uiFps = 60.0;
+    ok = savePageCapture(Page::Dashboard, 1180, 760, destination / L"performance-overlay.png") && ok;
+    ok = savePageCapture(Page::Dashboard, 1020, 680, destination / L"performance-overlay-small.png") && ok;
+    g_performanceOverlayEnabled = false;
+    ok = savePageCapture(Page::Sessions, 1180, 760, destination / L"pc-sessions.png") && ok;
+    g_pcSession = PcSession::Gaming;
+    g_sessionStatus = localized(L"Jeu est prêt · applications lancées", L"Gaming is ready · apps launched",
+                                L"Gaming ist bereit · Apps gestartet", L"游戏已准备就绪 · 应用已启动");
+    ok = savePageCapture(Page::Sessions, 1180, 760, destination / L"pc-session-active.png") && ok;
+    g_pcSession = PcSession::None;
+    g_sessionStatus.clear();
     g_appTheme = AppTheme::Light;
     ok = savePageCapture(Page::Dashboard, 1180, 760, destination / L"dashboard-light.png") && ok;
     ok = savePageCapture(Page::Settings, 1180, 760, destination / L"settings-light.png") && ok;
@@ -10007,7 +11030,7 @@ int createInterfaceCaptures(const fs::path& destination) {
     g_hoverAction = Action::None;
     g_downloadedUpdate = destination / L"RGBCcontrol-Setup-new.exe";
     g_updateAvailable = true;
-    g_availableVersion = L"0.18.1";
+    g_availableVersion = L"0.19.2";
     ok = savePageCapture(Page::Dashboard, 1020, 680, destination / L"header-update-ready.png") && ok;
     g_downloadedUpdate.clear();
     g_updateAvailable = false;
@@ -10049,6 +11072,10 @@ int createInterfaceCaptures(const fs::path& destination) {
     ok = savePageCapture(Page::Fans, 1020, 680, destination / L"fans-small.png") && ok;
     ok = savePageCapture(Page::Diagnostics, 1020, 680, destination / L"diagnostics-small.png") && ok;
     ok = savePageCapture(Page::SmartHub, 1020, 680, destination / L"smart-hub-small.png") && ok;
+    ok = savePageCapture(Page::AudioMixer, 1020, 680, destination / L"audio-mixer-small.png") && ok;
+    g_audioSessions.clear();
+    g_audioMixerStatus.clear();
+    ok = savePageCapture(Page::Sessions, 1020, 680, destination / L"pc-sessions-small.png") && ok;
     ok = savePageCapture(Page::Settings, 1020, 680, destination / L"settings-small.png") && ok;
     g_startupEnabled = true;
     g_minimizeToTray = true;
@@ -10082,7 +11109,13 @@ void setSliderValue(Action action, int index, float mouseX) {
             g_fanCurveEnabled = false;
             g_curveTarget = -1;
         }
-        g_activeProfile = -1;
+        else if (action == Action::AudioMasterVolume) {
+            g_audioEndpoint.volume = value / 100.0f;
+        }
+        else if (action == Action::AudioVolume && index >= 0 && index < static_cast<int>(g_audioSessions.size())) {
+            g_audioSessions[index].volume = value / 100.0f;
+        }
+        if (action != Action::AudioMasterVolume && action != Action::AudioVolume) g_activeProfile = -1;
         InvalidateRect(g_window, nullptr, FALSE);
         return;
     }
@@ -10155,13 +11188,119 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
         case Action::NavProfiles: g_page = Page::Profiles; g_scrollOffset = 0; break;
         case Action::NavFans: g_page = Page::Fans; g_scrollOffset = 0; break;
         case Action::NavDiagnostics: g_page = Page::Diagnostics; g_scrollOffset = 0; break;
+        case Action::NavSessions: g_page = Page::Sessions; g_scrollOffset = 0; break;
         case Action::NavSmartHub: g_page = Page::SmartHub; g_scrollOffset = 0; break;
+        case Action::NavAudioMixer: g_page = Page::AudioMixer; g_scrollOffset = 0; refreshAudioMixer(true); break;
         case Action::NavSettings: g_page = Page::Settings; g_scrollOffset = 0; break;
+        case Action::AudioRefresh:
+            refreshAudioMixer(true);
+            break;
+        case Action::AudioOpenWindowsMixer:
+            ShellExecuteW(g_window, L"open", L"ms-settings:apps-volume", nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        case Action::AudioMasterMute: {
+            std::wstring error;
+            const bool target = !g_audioEndpoint.muted;
+            if (setMasterAudioMute(target, error)) {
+                g_audioEndpoint.muted = target;
+                g_audioMixerStatus = target
+                    ? localized(L"Volume principal coupé.", L"Master volume muted.", L"Hauptlautstärke stumm.", L"主音量已静音。")
+                    : localized(L"Volume principal réactivé.", L"Master volume unmuted.", L"Hauptlautstärke wieder aktiv.", L"主音量已恢复。 ");
+            } else g_audioMixerStatus = error;
+            break;
+        }
+        case Action::AudioMute:
+            if (hit.index >= 0 && hit.index < static_cast<int>(g_audioSessions.size())) {
+                AudioSessionInfo& session = g_audioSessions[hit.index];
+                std::wstring error;
+                const bool target = !session.muted;
+                if (setAudioSessionMute(session.processId, target, error)) {
+                    session.muted = target;
+                    g_audioMixerStatus = session.displayName + (target
+                        ? localized(L" est maintenant coupée.", L" is now muted.", L" ist jetzt stumm.", L" 已静音。")
+                        : localized(L" est de nouveau audible.", L" is audible again.", L" ist wieder hörbar.", L" 已恢复声音。"));
+                } else g_audioMixerStatus = error;
+            }
+            break;
+        case Action::AudioMasterVolume:
+        case Action::AudioVolume:
+            g_dragAction = hit.action;
+            g_dragIndex = hit.index;
+            setSliderValue(hit.action, hit.index, mouseX);
+            break;
         case Action::Donate: MessageBoxW(g_window,
             localized(L"Le bouton est prêt. Ton lien PayPal sera ajouté plus tard.", L"The button is ready. Your PayPal link will be added later.",
                       L"Die Schaltfläche ist bereit. Dein PayPal-Link wird später ergänzt.", L"按钮已就绪，稍后可添加 PayPal 链接。"),
             L"RGBCcontrol", MB_OK | MB_ICONINFORMATION); break;
         case Action::Refresh: startScan(true); break;
+        case Action::StartPcSession:
+            if (hit.index >= static_cast<int>(PcSession::Gaming) && hit.index <= static_cast<int>(PcSession::Night)) {
+                startPcSession(static_cast<PcSession>(hit.index));
+            }
+            break;
+        case Action::StopPcSession:
+            stopPcSession(true);
+            break;
+        case Action::SessionBindApplication:
+            if (hit.index >= 0 && hit.index < static_cast<int>(g_sessionApplications.size())) {
+                if (g_pcSession != PcSession::None) {
+                    g_sessionStatus = localized(L"Arrête la session avant de modifier ses applications.",
+                                                L"Stop the session before changing its applications.",
+                                                L"Sitzung beenden, bevor Anwendungen geändert werden.",
+                                                L"请先停止会话，再修改应用。 ");
+                    break;
+                }
+                fs::path executable;
+                if (selectExecutableFile(executable)) {
+                    g_sessionApplications[hit.index] = executable.wstring();
+                    g_sessionPrimarySeen = false;
+                    saveAutomationSettings();
+                }
+            }
+            break;
+        case Action::SessionClearApplication:
+            if (hit.index >= 0 && hit.index < static_cast<int>(g_sessionApplications.size())) {
+                if (g_pcSession != PcSession::None) {
+                    g_sessionStatus = localized(L"Arrête la session avant de modifier ses applications.",
+                                                L"Stop the session before changing its applications.",
+                                                L"Sitzung beenden, bevor Anwendungen geändert werden.",
+                                                L"请先停止会话，再修改应用。 ");
+                    break;
+                }
+                g_sessionApplications[hit.index].clear();
+                if (hit.index == 0) g_sessionPrimarySeen = false;
+                saveAutomationSettings();
+            }
+            break;
+        case Action::ToggleSessionPower:
+        case Action::ToggleSessionCooling:
+        case Action::ToggleSessionGamepad:
+        case Action::ToggleSessionLaunchApps:
+            if (g_pcSession != PcSession::None) {
+                g_sessionStatus = localized(L"Arrête la session avant de modifier sa préparation.",
+                                            L"Stop the session before changing its preparation.",
+                                            L"Sitzung beenden, bevor die Vorbereitung geändert wird.",
+                                            L"请先停止会话，再修改准备选项。 ");
+                break;
+            }
+            if (hit.action == Action::ToggleSessionPower) g_sessionPowerEnabled = !g_sessionPowerEnabled;
+            else if (hit.action == Action::ToggleSessionCooling) g_sessionCoolingEnabled = !g_sessionCoolingEnabled;
+            else if (hit.action == Action::ToggleSessionGamepad) g_sessionGamepadEnabled = !g_sessionGamepadEnabled;
+            else g_sessionLaunchAppsEnabled = !g_sessionLaunchAppsEnabled;
+            saveAutomationSettings();
+            break;
+        case Action::OpenSoundSettings:
+            ShellExecuteW(g_window, L"open", L"ms-settings:sound", nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        case Action::OpenFocusSettings:
+            ShellExecuteW(g_window, L"open", L"ms-settings:notifications", nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        case Action::OpenGameModeSettings:
+            ShellExecuteW(g_window, L"open", L"ms-settings:gaming-gamemode", nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        case Action::OpenGameBar:
+            ShellExecuteW(g_window, L"open", L"ms-gamebar:", nullptr, nullptr, SW_SHOWNORMAL);
+            break;
         case Action::ToggleAutopilot: {
             const bool enable = !(g_applicationProfilesEnabled && g_smartModeEnabled &&
                                   g_scheduleEnabled && g_gamepadAutoPriority);
@@ -10553,6 +11692,37 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             g_compactDashboard = !g_compactDashboard;
             saveAutomationSettings();
             break;
+        case Action::TogglePerformanceOverlay:
+            g_performanceOverlayEnabled = !g_performanceOverlayEnabled;
+            g_lastPerformanceInvalidateAt = 0;
+            saveAutomationSettings();
+            updatePerformanceOverlayWindow();
+            break;
+        case Action::TogglePerformanceFps:
+            g_performanceShowFps = !g_performanceShowFps;
+            saveAutomationSettings();
+            updatePerformanceOverlayWindow();
+            break;
+        case Action::TogglePerformanceCpu:
+            g_performanceShowCpu = !g_performanceShowCpu;
+            saveAutomationSettings();
+            updatePerformanceOverlayWindow();
+            break;
+        case Action::TogglePerformanceGpu:
+            g_performanceShowGpu = !g_performanceShowGpu;
+            saveAutomationSettings();
+            updatePerformanceOverlayWindow();
+            break;
+        case Action::TogglePerformanceMemory:
+            g_performanceShowMemory = !g_performanceShowMemory;
+            saveAutomationSettings();
+            updatePerformanceOverlayWindow();
+            break;
+        case Action::TogglePerformanceFans:
+            g_performanceShowFans = !g_performanceShowFans;
+            saveAutomationSettings();
+            updatePerformanceOverlayWindow();
+            break;
         case Action::ClearTelemetry:
             g_telemetry.clear();
             saveTelemetryHistory();
@@ -10608,6 +11778,7 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             }
             break;
         case Action::ResetPreferences:
+            stopPcSession(false);
             g_appTheme = AppTheme::Dark;
             g_accentPreset = 0;
             g_detectionIntervalSeconds = 5;
@@ -10624,14 +11795,25 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             g_restoreOnWake = true;
             g_smartModeEnabled = false;
             g_systemNotificationsEnabled = true;
+            g_sessionPowerEnabled = true;
+            g_sessionCoolingEnabled = true;
+            g_sessionGamepadEnabled = true;
+            g_sessionLaunchAppsEnabled = true;
             g_gamepadAutoPriority = true;
             g_textScale = 1;
             g_highContrast = false;
             g_compactDashboard = false;
+            g_performanceOverlayEnabled = false;
+            g_performanceShowFps = true;
+            g_performanceShowCpu = true;
+            g_performanceShowGpu = true;
+            g_performanceShowMemory = true;
+            g_performanceShowFans = true;
             g_gamepadPageCache.reset();
             applyWindowChromeTheme();
             refreshGlobalHotkeys();
             saveAutomationSettings();
+            updatePerformanceOverlayWindow();
             break;
         case Action::ScheduleToggle:
             g_scheduleEnabled = !g_scheduleEnabled;
@@ -11014,7 +12196,17 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                      (gamepadLightingAnimating && now - g_lastGamepadFrameAt >= 33));
                 if (gamepadAnimating) g_lastGamepadFrameAt = now;
                 if (gamepadAnimating) g_gamepadFastPaintRequested = true;
-                if (liveUiAnimating || headerAnimating || splashAnimating || ambientAnimating || gamepadAnimating) {
+                const bool performanceAnimating = g_performanceOverlayEnabled &&
+                                                  now - g_lastPerformanceInvalidateAt >= 500;
+                if (performanceAnimating) {
+                    g_lastPerformanceInvalidateAt = now;
+                    updatePerformanceOverlayWindow();
+                }
+                const bool audioMixerRefreshing = g_page == Page::AudioMixer &&
+                    g_dragAction != Action::AudioVolume && g_dragAction != Action::AudioMasterVolume &&
+                    now - g_lastAudioMixerRefresh >= 1800;
+                if (audioMixerRefreshing) refreshAudioMixer(false);
+                if (liveUiAnimating || headerAnimating || splashAnimating || ambientAnimating || gamepadAnimating || performanceAnimating || audioMixerRefreshing) {
                     InvalidateRect(window, nullptr, FALSE);
                 }
                 if (GetTickCount64() - g_lastScheduleCheck >= 30000) {
@@ -11032,6 +12224,11 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 if (now - g_lastHealthAlertCheck >= 8000) {
                     g_lastHealthAlertCheck = now;
                     evaluateHealthAlerts();
+                }
+                if (now - g_lastPcSessionCheck >= 1800) {
+                    g_lastPcSessionCheck = now;
+                    evaluatePcSession();
+                    if (g_page == Page::Sessions) InvalidateRect(window, nullptr, FALSE);
                 }
             }
             return 0;
@@ -11271,7 +12468,8 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                                     iterator->action == Action::Minimize || iterator->action == Action::Maximize || iterator->action == Action::Close;
                 bool navigationAction = iterator->action == Action::NavDashboard || iterator->action == Action::NavDevices || iterator->action == Action::NavGamepads || iterator->action == Action::NavEffects ||
                                         iterator->action == Action::NavProfiles || iterator->action == Action::NavFans ||
-                                        iterator->action == Action::NavDiagnostics || iterator->action == Action::NavSmartHub || iterator->action == Action::NavSettings ||
+                                        iterator->action == Action::NavDiagnostics || iterator->action == Action::NavSessions ||
+                                        iterator->action == Action::NavSmartHub || iterator->action == Action::NavAudioMixer || iterator->action == Action::NavSettings ||
                                         iterator->action == Action::Donate;
                 if (y < kHeaderHeight && !headerAction) continue;
                 if (y >= kHeaderHeight && x < kSidebarWidth && !navigationAction) continue;
@@ -11331,6 +12529,12 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             InvalidateRect(window, nullptr, FALSE);
             return 0;
         case WM_LBUTTONUP: {
+            const Action releasedAction = g_dragAction;
+            const int releasedIndex = g_dragIndex;
+            const std::uint32_t releasedProcessId = releasedIndex >= 0 && releasedIndex < static_cast<int>(g_audioSessions.size())
+                ? g_audioSessions[releasedIndex].processId : 0;
+            const float releasedAudioVolume = releasedIndex >= 0 && releasedIndex < static_cast<int>(g_audioSessions.size())
+                ? g_audioSessions[releasedIndex].volume : 0.0f;
             const bool curveChanged = g_dragAction == Action::FanCurvePoint;
             const bool gamepadRotate = g_dragAction == Action::GamepadRotate;
             const bool layoutChanged = g_dragAction == Action::LayoutDevice;
@@ -11349,6 +12553,19 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (curveChanged) {
                 saveCurveSettings();
                 if (g_fanCurveEnabled) applyFanCurve(true);
+            }
+            if (releasedAction == Action::AudioMasterVolume) {
+                std::wstring error;
+                if (!setMasterAudioVolume(g_audioEndpoint.volume, error)) g_audioMixerStatus = error;
+                else g_audioMixerStatus = localized(L"Volume principal réglé.", L"Master volume adjusted.",
+                                                     L"Hauptlautstärke eingestellt.", L"主音量已调整。");
+                InvalidateRect(window, nullptr, FALSE);
+            } else if (releasedAction == Action::AudioVolume && releasedIndex >= 0) {
+                std::wstring error;
+                if (!setAudioSessionVolume(releasedProcessId, releasedAudioVolume, error)) g_audioMixerStatus = error;
+                else g_audioMixerStatus = localized(L"Volume de l'application réglé.", L"Application volume adjusted.",
+                                                     L"Anwendungslautstärke eingestellt.", L"应用音量已调整。");
+                InvalidateRect(window, nullptr, FALSE);
             }
             return 0;
         }
@@ -11414,6 +12631,8 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             DestroyWindow(window);
             return 0;
         case WM_DESTROY:
+            stopPcSession(false);
+            destroyPerformanceOverlayWindow();
             saveAutomationSettings();
             saveTelemetryHistory();
             KillTimer(window, APP_TIMER);

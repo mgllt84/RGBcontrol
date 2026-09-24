@@ -1,5 +1,39 @@
-RGBCcontrol 0.18.0 — application native C++ pour Windows
+RGBCcontrol 0.20.0 — application native C++ pour Windows
 =====================================================
+
+Mixeur audio 0.20.0
+-------------------
+Le nouvel onglet Mixeur audio détecte automatiquement les applications qui
+possèdent une session audio Windows. Il permet de régler leur volume
+séparément, de les couper ou de les réactiver, ainsi que de contrôler le
+volume principal, sans quitter RGBCcontrol. La liste s'actualise
+automatiquement et reste compatible avec le mixeur officiel de Windows.
+
+Sessions PC 0.19.0
+------------------
+Le nouvel onglet Sessions PC prépare l'ordinateur pour le jeu, le travail, le
+streaming ou la nuit. Une session peut sélectionner un mode d'alimentation,
+appliquer un profil de ventilation, donner la priorité aux applications
+choisies, préparer la manette et lancer jusqu'à trois programmes.
+
+L'état précédent est conservé en mémoire puis restauré à l'arrêt : mode
+d'alimentation, priorité des processus, ventilation et état XInput. Lorsque
+l'application principale configurée se ferme, la session s'arrête et restaure
+automatiquement le PC. Aucune application en arrière-plan n'est fermée par
+RGBCcontrol.
+
+La page affiche aussi la charge mémoire, les températures CPU/GPU, le nombre
+de ventilateurs et un conseil compréhensible. Les réglages du casque, du micro,
+de Ne pas déranger et du mode Jeu ouvrent les pages officielles de Windows,
+sans utiliser de modification fragile ou non documentée du registre.
+
+Panneau de performances
+-----------------------
+Depuis Paramètres, la superposition transparente de performances peut être activée
+ou désactivée. Elle s'affiche sur l'écran actif, au-dessus du jeu, sans capturer
+les clics. Chaque utilisateur choisit séparément les indicateurs affichés en haut à droite :
+FPS de l'interface, charge et température CPU, température GPU, mémoire RAM et
+vitesse moyenne des ventilateurs détectés. Les choix sont sauvegardés automatiquement.
 
 Pilote automatique 0.18.0
 --------------------------

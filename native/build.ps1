@@ -20,7 +20,7 @@ $buildDirectory = Join-Path $projectRoot 'build'
 $distDirectory = Join-Path $projectRoot 'dist'
 $outputDirectory = Join-Path $workspaceRoot 'outputs\RGBCcontrol-CPP'
 $legacyDirectory = Join-Path $workspaceRoot 'outputs\RGBCcontrol'
-$appVersion = '0.18.0'
+$appVersion = '0.20.0'
 New-Item -ItemType Directory -Force -Path $buildDirectory,$distDirectory,$outputDirectory | Out-Null
 
 & (Join-Path $projectRoot 'tools\MakeIcon.ps1') | Out-Null
@@ -32,9 +32,9 @@ if ($LASTEXITCODE -ne 0) { throw 'La compilation des ressources a échoué.' }
 $executable = Join-Path $buildDirectory 'RGBCcontrol.exe'
 $cppArguments = @(
     '-std=c++20','-O2','-Wall','-Wextra','-municode','-mwindows','-static','-static-libgcc','-static-libstdc++',
-    (Join-Path $projectRoot 'src\main.cpp'),(Join-Path $projectRoot 'src\openrgb.cpp'),(Join-Path $projectRoot 'src\plugin_engine.cpp'),(Join-Path $projectRoot 'src\audio_loopback.cpp'),
+    (Join-Path $projectRoot 'src\main.cpp'),(Join-Path $projectRoot 'src\openrgb.cpp'),(Join-Path $projectRoot 'src\plugin_engine.cpp'),(Join-Path $projectRoot 'src\audio_loopback.cpp'),(Join-Path $projectRoot 'src\audio_sessions.cpp'),
     (Join-Path $projectRoot 'src\screen_capture.cpp'),$resourceObject,
-    '-o',$executable,'-lgdiplus','-ldwmapi','-lsetupapi','-lcrypt32','-lws2_32','-lshell32','-lcomdlg32','-lole32','-luuid','-lurlmon','-ladvapi32'
+    '-o',$executable,'-lgdiplus','-ldwmapi','-lsetupapi','-lcrypt32','-lws2_32','-lshell32','-lcomdlg32','-lole32','-luuid','-lurlmon','-ladvapi32','-lpowrprof'
 )
 & $compiler @cppArguments
 if ($LASTEXITCODE -ne 0) { throw 'La compilation C++ a échoué.' }

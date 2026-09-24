@@ -75,7 +75,7 @@ constexpr WPARAM WTS_SESSION_LOCK_VALUE = 0x7;
 constexpr WPARAM WTS_SESSION_UNLOCK_VALUE = 0x8;
 constexpr int kHeaderHeight = 76;
 constexpr int kSidebarWidth = 188;
-constexpr wchar_t kAppVersion[] = L"0.20.0";
+constexpr wchar_t kAppVersion[] = L"0.20.1";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -5303,27 +5303,25 @@ void drawNavigation(Graphics& graphics, int height) {
     text(graphics, localized(L"CENTRE DE CONTRÔLE", L"CONTROL CENTER", L"STEUERZENTRALE", L"控制中心"),
          RectF(18, static_cast<float>(kHeaderHeight + 20), kSidebarWidth - 36.0f, 18), 8,
          Color(255, 105, 116, 140), FontStyleBold);
-    struct Nav { const wchar_t* label; Page page; Action action; } navs[] = {
-        {localized(L"Tableau de bord", L"Dashboard", L"Übersicht", L"控制面板"), Page::Dashboard, Action::NavDashboard},
-        {localized(L"Appareils", L"Devices", L"Geräte", L"设备"), Page::Devices, Action::NavDevices},
-        {localized(L"Manette", L"Controller", L"Controller", L"手柄"), Page::Gamepads, Action::NavGamepads},
-        {localized(L"Effets", L"Effects", L"Effekte", L"灯光效果"), Page::Effects, Action::NavEffects},
-        {localized(L"Profils", L"Profiles", L"Profile", L"模式"), Page::Profiles, Action::NavProfiles},
-        {localized(L"Ventilation", L"Cooling", L"Lüfter", L"风扇控制"), Page::Fans, Action::NavFans},
-        {localized(L"Diagnostic", L"Diagnostics", L"Diagnose", L"诊断"), Page::Diagnostics, Action::NavDiagnostics},
-        {localized(L"Sessions PC", L"PC Sessions", L"PC-Sitzungen", L"电脑会话"), Page::Sessions, Action::NavSessions},
-        {localized(L"Pilote auto", L"Smart Hub", L"Autopilot", L"自动驾驶"), Page::SmartHub, Action::NavSmartHub},
-        {localized(L"Mixeur audio", L"Audio mixer", L"Audiomixer", L"音频混音器"), Page::AudioMixer, Action::NavAudioMixer},
-        {localized(L"Paramètres", L"Settings", L"Einstellungen", L"设置"), Page::Settings, Action::NavSettings}
+    struct Nav { const wchar_t* label; Page page; Action action; int icon; } navs[] = {
+        {localized(L"Accueil", L"Home", L"Start", L"首页"), Page::Dashboard, Action::NavDashboard, 0},
+        {localized(L"Appareils", L"Devices", L"Geräte", L"设备"), Page::Devices, Action::NavDevices, 1},
+        {localized(L"Effets", L"Effects", L"Effekte", L"灯光效果"), Page::Effects, Action::NavEffects, 3},
+        {localized(L"Audio", L"Audio", L"Audio", L"音频"), Page::AudioMixer, Action::NavAudioMixer, 9},
+        {localized(L"Manette", L"Controller", L"Controller", L"手柄"), Page::Gamepads, Action::NavGamepads, 2},
+        {localized(L"Ventilation", L"Cooling", L"Lüfter", L"风扇控制"), Page::Fans, Action::NavFans, 5},
+        {localized(L"Automatisation", L"Automation", L"Automatisierung", L"自动化"), Page::SmartHub, Action::NavSmartHub, 8},
+        {localized(L"Réglages", L"Settings", L"Einstellungen", L"设置"), Page::Settings, Action::NavSettings, 10}
     };
     float y = static_cast<float>(kHeaderHeight + 40);
     const float navHeight = height <= 700 ? 34.0f : 38.0f;
     const float navStep = height <= 700 ? 36.0f : 41.0f;
-    int navIndex = 0;
     for (const Nav& nav : navs) {
         RectF rect(12, y, static_cast<float>(kSidebarWidth - 24), navHeight);
         const bool active = g_page == nav.page ||
-                            (nav.page == Page::Devices && (g_page == Page::DuckyAssistant || g_page == Page::Compatibility));
+                            (nav.page == Page::Devices && (g_page == Page::DuckyAssistant || g_page == Page::Compatibility)) ||
+                            (nav.page == Page::SmartHub && (g_page == Page::Profiles || g_page == Page::Sessions)) ||
+                            (nav.page == Page::Settings && g_page == Page::Diagnostics);
         const bool hovered = g_hoverAction == nav.action;
         if (active) {
             GraphicsPath activePath;
@@ -5340,14 +5338,13 @@ void drawNavigation(Graphics& graphics, int height) {
             fillRound(graphics, icon, 10, lightTheme() ? Color(255, 238, 242, 249) : Color(255, 27, 31, 40));
             strokeRound(graphics, icon, 10, lightTheme() ? Color(255, 216, 222, 234) : Color(255, 44, 50, 64));
         }
-        drawNavigationIcon(graphics, navIndex, icon,
+        drawNavigationIcon(graphics, nav.icon, icon,
                            active ? accentButtonText() : Color(255, 145, 156, 181));
         text(graphics, nav.label, RectF(rect.X + 50, rect.Y, rect.Width - 58, rect.Height), 11,
              active ? accentButtonText() : Color(255, 168, 177, 198),
              active ? FontStyleBold : FontStyleRegular, StringAlignmentNear, StringAlignmentCenter);
         addHit(rect, nav.action);
         y += navStep;
-        ++navIndex;
     }
     RectF donate(14, static_cast<float>(height - 126), static_cast<float>(kSidebarWidth - 28), 40);
     fillRound(graphics, donate, 12, lightTheme() ? Color(255, 248, 238, 246) : Color(255, 31, 27, 36));
@@ -5378,6 +5375,44 @@ void drawPageIntro(Graphics& graphics, float x, float y, float titleWidth,
          8, accentTint(0.42), FontStyleBold, StringAlignmentNear, StringAlignmentCenter);
     text(graphics, title, RectF(x, y + 31.0f, titleWidth, 40.0f), 29,
          Color(255, 244, 246, 251), FontStyleBold);
+}
+
+bool automationSectionPage(Page page) {
+    return page == Page::Profiles || page == Page::Sessions || page == Page::SmartHub;
+}
+
+bool settingsSectionPage(Page page) {
+    return page == Page::Diagnostics || page == Page::Settings;
+}
+
+void drawPageSectionTabs(Graphics& graphics, int width, float y, bool automation) {
+    const float x = kSidebarWidth + 28.0f;
+    const float available = width - x - 28.0f;
+    RectF bar(x, y, available, 54.0f);
+    fillRound(graphics, bar, 17, Color(246, 26, 30, 42));
+    strokeRound(graphics, bar, 17, Color(255, 45, 52, 68));
+    text(graphics,
+         automation ? localized(L"AUTOMATISATION", L"AUTOMATION", L"AUTOMATISIERUNG", L"自动化")
+                    : localized(L"RÉGLAGES", L"SETTINGS", L"EINSTELLUNGEN", L"设置"),
+         RectF(bar.X + 18, bar.Y, 155, bar.Height), 8, accentTint(0.42), FontStyleBold,
+         StringAlignmentNear, StringAlignmentCenter);
+    const int count = automation ? 3 : 2;
+    const float tabsX = bar.X + 174.0f;
+    const float gap = 8.0f;
+    const float tabWidth = (bar.GetRight() - 14.0f - tabsX - gap * (count - 1)) / count;
+    if (automation) {
+        drawButton(graphics, RectF(tabsX, bar.Y + 9, tabWidth, 36),
+                   localized(L"Profils", L"Profiles", L"Profile", L"模式"), g_page == Page::Profiles, Action::NavProfiles);
+        drawButton(graphics, RectF(tabsX + tabWidth + gap, bar.Y + 9, tabWidth, 36),
+                   localized(L"Sessions PC", L"PC Sessions", L"PC-Sitzungen", L"电脑会话"), g_page == Page::Sessions, Action::NavSessions);
+        drawButton(graphics, RectF(tabsX + (tabWidth + gap) * 2.0f, bar.Y + 9, tabWidth, 36),
+                   localized(L"Pilote auto", L"Autopilot", L"Autopilot", L"自动驾驶"), g_page == Page::SmartHub, Action::NavSmartHub);
+    } else {
+        drawButton(graphics, RectF(tabsX, bar.Y + 9, tabWidth, 36),
+                   localized(L"Diagnostic", L"Diagnostics", L"Diagnose", L"诊断"), g_page == Page::Diagnostics, Action::NavDiagnostics);
+        drawButton(graphics, RectF(tabsX + tabWidth + gap, bar.Y + 9, tabWidth, 36),
+                   localized(L"Paramètres", L"Preferences", L"Optionen", L"参数"), g_page == Page::Settings, Action::NavSettings);
+    }
 }
 
 void drawDashboard(Graphics& graphics, int width, int height, float originY) {
@@ -10104,6 +10139,13 @@ void drawApplicationScene(Graphics& graphics, int width, int height) {
     graphics.SetClip(contentClip, CombineModeReplace);
     const std::size_t firstScrollableHit = g_hits.size();
     float originY = static_cast<float>(kHeaderHeight + 24) - g_scrollOffset;
+    if (automationSectionPage(g_page)) {
+        drawPageSectionTabs(graphics, width, originY, true);
+        originY += 68.0f;
+    } else if (settingsSectionPage(g_page)) {
+        drawPageSectionTabs(graphics, width, originY, false);
+        originY += 68.0f;
+    }
     if (g_page == Page::Dashboard) drawDashboard(graphics, width, height, originY);
     else if (g_page == Page::Devices) drawDevices(graphics, width, height, originY);
     else if (g_page == Page::Gamepads) drawGamepads(graphics, width, height, originY);
@@ -12473,7 +12515,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                                         iterator->action == Action::Donate;
                 if (y < kHeaderHeight && !headerAction) continue;
                 if (y >= kHeaderHeight && x < kSidebarWidth && !navigationAction) continue;
-                if (y >= kHeaderHeight && x >= kSidebarWidth && (headerAction || navigationAction)) continue;
+                if (y >= kHeaderHeight && x >= kSidebarWidth && headerAction) continue;
                 if (contains(iterator->rect, x, y)) { handleAction(*iterator, x, y); SetCapture(window); return 0; }
             }
             return 0;

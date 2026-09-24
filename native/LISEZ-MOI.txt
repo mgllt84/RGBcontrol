@@ -1,5 +1,12 @@
-RGBCcontrol 0.20.0 — application native C++ pour Windows
+RGBCcontrol 0.20.1 — application native C++ pour Windows
 =====================================================
+
+Interface réorganisée 0.20.1
+----------------------------
+La navigation principale est ramenée à huit rubriques faciles à identifier.
+Profils, Sessions PC et Pilote auto sont réunis dans Automatisation ;
+Diagnostic et Paramètres sont réunis dans Réglages. Les options restent toutes
+disponibles grâce à des onglets visibles en haut des pages concernées.
 
 Mixeur audio 0.20.0
 -------------------

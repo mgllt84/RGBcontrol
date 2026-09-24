@@ -2,7 +2,7 @@
 
 Application Windows de contrôle RGB, de gestion des effets lumineux et de surveillance matérielle.
 
-Version actuelle : **0.20.0**.
+Version actuelle : **0.20.1**.
 
 - Contrôle RGB individuel et effets animés via OpenRGB et les plugins RGBCcontrol.
 - Détection matérielle, surveillance et profils de ventilation.
@@ -20,5 +20,6 @@ Version actuelle : **0.20.0**.
 - Accès sûr aux réglages Windows du son, du microphone, des notifications et du mode Jeu.
 - Superposition de performances optionnelle et transparente sur l'écran : FPS, CPU, GPU, RAM et ventilateurs sélectionnables séparément.
 - Mixeur audio par application : volume principal, volume indépendant, sourdine et détection automatique des applications qui produisent du son.
+- Navigation simplifiée en huit rubriques, avec Profils/Sessions/Pilote auto regroupés sous Automatisation et Diagnostic/Paramètres sous Réglages.
 
 La version installable est disponible dans la section [Releases](https://github.com/mgllt84/RGBcontrol/releases/latest).

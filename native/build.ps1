@@ -11,6 +11,12 @@ $csharpCompiler = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $dotnetSdk = Join-Path $workspaceRoot 'work\dotnet-sdk-10.0.401\dotnet.exe'
 $hidMaestroCore = Join-Path $workspaceRoot 'work\HIDMaestro-v1.7.3\HIDMaestro.Core.dll'
 $env:PATH = "$toolBin;$env:PATH"
+$dotnetHome = Join-Path $workspaceRoot 'work\dotnet-home'
+New-Item -ItemType Directory -Force -Path $dotnetHome | Out-Null
+$env:DOTNET_CLI_HOME = $dotnetHome
+$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+$env:DOTNET_NOLOGO = '1'
 
 foreach ($required in @($compiler, $resourceCompiler, $installerCompiler, $csharpCompiler, $dotnetSdk, $hidMaestroCore)) {
     if (-not (Test-Path -LiteralPath $required)) { throw "Outil manquant : $required" }
@@ -20,7 +26,7 @@ $buildDirectory = Join-Path $projectRoot 'build'
 $distDirectory = Join-Path $projectRoot 'dist'
 $outputDirectory = Join-Path $workspaceRoot 'outputs\RGBCcontrol-CPP'
 $legacyDirectory = Join-Path $workspaceRoot 'outputs\RGBCcontrol'
-$appVersion = '0.20.0'
+$appVersion = '0.20.1'
 New-Item -ItemType Directory -Force -Path $buildDirectory,$distDirectory,$outputDirectory | Out-Null
 
 & (Join-Path $projectRoot 'tools\MakeIcon.ps1') | Out-Null

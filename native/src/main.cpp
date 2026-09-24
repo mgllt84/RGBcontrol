@@ -75,7 +75,7 @@ constexpr WPARAM WTS_SESSION_LOCK_VALUE = 0x7;
 constexpr WPARAM WTS_SESSION_UNLOCK_VALUE = 0x8;
 constexpr int kHeaderHeight = 76;
 constexpr int kSidebarWidth = 188;
-constexpr wchar_t kAppVersion[] = L"0.20.1";
+constexpr wchar_t kAppVersion[] = L"0.20.2";
 constexpr wchar_t kOfficialUpdateManifestUrl[] =
     L"https://github.com/mgllt84/RGBcontrol/releases/latest/download/RGBCcontrol-update.ini";
 constexpr double kLaunchDurationMs = 2750.0;
@@ -103,7 +103,7 @@ enum class Action {
     SelectLanguage, SelectTheme, Update, SelectAccent, SelectScanInterval, SelectEffectQuality,
     ToggleStartupQuiet, ToggleCloseToTray, ToggleRememberPage, ToggleReduceMotion, ResetPreferences,
     TogglePerformanceOverlay, TogglePerformanceFps, TogglePerformanceCpu, TogglePerformanceGpu,
-    TogglePerformanceMemory, TogglePerformanceFans,
+    TogglePerformanceMemory, TogglePerformanceFans, TogglePerformancePositionEdit, SelectPerformancePosition,
     PickerBackdrop, PickerWheel, PickerBrightness, PickerPreset, PickerCancel, PickerApply,
     DuckyBack, DuckyMode, DuckyPrevious, DuckyNext, DuckySync, DuckyOpenManual,
     DuckyCalibrationNextMode, DuckyCalibrationRestart, CompatibilityBack, CompatibilityRun,
@@ -574,6 +574,12 @@ bool g_performanceShowCpu = true;
 bool g_performanceShowGpu = true;
 bool g_performanceShowMemory = true;
 bool g_performanceShowFans = true;
+bool g_performancePositionEdit = false;
+bool g_performanceOverlayDragging = false;
+POINT g_performanceDragCursor{};
+POINT g_performanceDragWindow{};
+int g_performancePositionX = 10000;
+int g_performancePositionY = 0;
 double g_uiFps = 60.0;
 bool g_performanceOverlayExternalRendering = false;
 ULONGLONG g_lastPaintAt = 0;
@@ -1561,6 +1567,8 @@ void saveAutomationSettings() {
     writeIniInteger(path, section, L"PerformanceGpu", g_performanceShowGpu ? 1 : 0);
     writeIniInteger(path, section, L"PerformanceMemory", g_performanceShowMemory ? 1 : 0);
     writeIniInteger(path, section, L"PerformanceFans", g_performanceShowFans ? 1 : 0);
+    writeIniInteger(path, section, L"PerformancePositionX", g_performancePositionX);
+    writeIniInteger(path, section, L"PerformancePositionY", g_performancePositionY);
     for (int index = 0; index < static_cast<int>(g_profileApplications.size()); ++index) {
         const std::wstring key = L"ProfileApplication" + std::to_wstring(index + 1);
         WritePrivateProfileStringW(section.c_str(), key.c_str(), g_profileApplications[index].c_str(), path.c_str());
@@ -1629,6 +1637,8 @@ void loadAutomationSettings() {
     g_performanceShowGpu = readIniInteger(path, section, L"PerformanceGpu", 1) != 0;
     g_performanceShowMemory = readIniInteger(path, section, L"PerformanceMemory", 1) != 0;
     g_performanceShowFans = readIniInteger(path, section, L"PerformanceFans", 1) != 0;
+    g_performancePositionX = std::clamp(readIniInteger(path, section, L"PerformancePositionX", 10000), 0, 10000);
+    g_performancePositionY = std::clamp(readIniInteger(path, section, L"PerformancePositionY", 0), 0, 10000);
     for (int index = 0; index < static_cast<int>(g_profileApplications.size()); ++index) {
         const std::wstring key = L"ProfileApplication" + std::to_wstring(index + 1);
         g_profileApplications[index] = readIniText(path, section, key.c_str());
@@ -8903,16 +8913,16 @@ void drawSettings(Graphics& graphics, int width, int height, float originY) {
                   g_reduceMotion, Action::ToggleReduceMotion);
 
     y = preferenceCard.GetBottom() + 18;
-    RectF performanceCard(x, y, available, 222);
+    RectF performanceCard(x, y, available, 334);
     fillRound(graphics, performanceCard, 18, Color(255, 28, 32, 45));
     strokeRound(graphics, performanceCard, 18, g_performanceOverlayEnabled ? accentColor(145) : Color(255, 39, 45, 61),
                 g_performanceOverlayEnabled ? 1.4f : 1.0f);
     text(graphics, localized(L"Superposition de performances", L"Performance overlay", L"Leistungsanzeige", L"性能叠加层"),
          RectF(performanceCard.X + 20, performanceCard.Y + 17, 330, 23), 15, Color::White, FontStyleBold);
-    text(graphics, localized(L"Affiche une petite fenêtre transparente au-dessus du jeu, sans bloquer les clics.",
-                             L"Show a small transparent window above your game without blocking clicks.",
-                             L"Zeige ein kleines transparentes Fenster über dem Spiel, ohne Klicks zu blockieren.",
-                             L"在游戏上方显示透明小窗口，不会阻挡点击。"),
+    text(graphics, localized(L"Affiche uniquement le texte au-dessus du jeu, sans fond ni cadre.",
+                             L"Show text only above your game, without a background or frame.",
+                             L"Zeige nur Text über dem Spiel, ohne Hintergrund oder Rahmen.",
+                             L"仅在游戏上方显示文字，无背景和边框。"),
          RectF(performanceCard.X + 20, performanceCard.Y + 42, performanceCard.Width - 40, 18), 9, secondaryTextColor());
     compactToggle(RectF(performanceCard.X + 20, performanceCard.Y + 70, performanceCard.Width - 40, 42),
                   localized(L"Afficher sur l'écran", L"Show on screen", L"Auf dem Bildschirm anzeigen", L"显示在屏幕上"),
@@ -8938,6 +8948,37 @@ void drawSettings(Graphics& graphics, int width, int height, float originY) {
                                                                performanceChoices[index].label[2], performanceChoices[index].label[3]),
                    *performanceChoices[index].enabled, performanceChoices[index].action);
     }
+    text(graphics, localized(L"Position à l'écran", L"Screen position", L"Bildschirmposition", L"屏幕位置"),
+         RectF(performanceCard.X + 20, performanceCard.Y + 207, 210, 18), 9, secondaryTextColor(), FontStyleBold);
+    const std::wstring coordinates = L"X " + std::to_wstring(g_performancePositionX / 100) + L" %  ·  Y " +
+                                     std::to_wstring(g_performancePositionY / 100) + L" %";
+    text(graphics, coordinates, RectF(performanceCard.GetRight() - 210, performanceCard.Y + 207, 190, 18),
+         8, secondaryTextColor(), FontStyleBold, StringAlignmentFar);
+    const wchar_t* positionNames[][4] = {
+        {L"Haut gauche", L"Top left", L"Oben links", L"左上"},
+        {L"Haut droite", L"Top right", L"Oben rechts", L"右上"},
+        {L"Centre", L"Center", L"Mitte", L"居中"},
+        {L"Bas gauche", L"Bottom left", L"Unten links", L"左下"},
+        {L"Bas droite", L"Bottom right", L"Unten rechts", L"右下"}
+    };
+    const float positionGap = 7.0f;
+    const float positionWidth = (performanceCard.Width - 40.0f - positionGap * 4.0f) / 5.0f;
+    const int presetX[] = {0, 10000, 5000, 0, 10000};
+    const int presetY[] = {0, 0, 5000, 10000, 10000};
+    for (int index = 0; index < 5; ++index) {
+        const bool selected = std::abs(g_performancePositionX - presetX[index]) < 120 &&
+                              std::abs(g_performancePositionY - presetY[index]) < 120;
+        drawButton(graphics, RectF(performanceCard.X + 20.0f + index * (positionWidth + positionGap),
+                                   performanceCard.Y + 230, positionWidth, 36),
+                   localized(positionNames[index][0], positionNames[index][1], positionNames[index][2], positionNames[index][3]),
+                   selected, Action::SelectPerformancePosition, index);
+    }
+    drawButton(graphics, RectF(performanceCard.X + 20, performanceCard.Y + 278, performanceCard.Width - 40, 38),
+               g_performancePositionEdit
+                   ? localized(L"Terminer le placement", L"Finish positioning", L"Positionierung beenden", L"完成定位")
+                   : localized(L"Déplacer librement à la souris", L"Move freely with the mouse",
+                               L"Frei mit der Maus verschieben", L"用鼠标自由移动"),
+               g_performancePositionEdit, Action::TogglePerformancePositionEdit);
 
     y = performanceCard.GetBottom() + 18;
     RectF windowsCard(x, y, available, 200);
@@ -9940,6 +9981,16 @@ double launchElapsedMs() {
                                    : static_cast<double>(GetTickCount64() - g_launchAnimationStartedAt);
 }
 
+int performanceOverlayMetricCount() {
+    return static_cast<int>(g_performanceShowFps) + static_cast<int>(g_performanceShowCpu) +
+           static_cast<int>(g_performanceShowGpu) + static_cast<int>(g_performanceShowMemory) +
+           static_cast<int>(g_performanceShowFans);
+}
+
+SIZE performanceOverlaySize() {
+    return SIZE{228, 10 + std::max(1, performanceOverlayMetricCount()) * 24};
+}
+
 void drawPerformanceOverlay(Graphics& graphics, int width, int /*height*/) {
     if (!g_performanceOverlayEnabled || g_colorPickerOpen) return;
 
@@ -9980,37 +10031,34 @@ void drawPerformanceOverlay(Graphics& graphics, int width, int /*height*/) {
         metrics.push_back({localized(L"Ventilos", L"Fans", L"Lüfter", L"风扇"), value, false});
     }
 
-    const float panelWidth = 232.0f;
-    const float panelHeight = 53.0f + std::max(1, static_cast<int>(metrics.size())) * 21.0f;
+    const SIZE overlaySize = performanceOverlaySize();
+    const float panelWidth = static_cast<float>(overlaySize.cx);
+    const float panelHeight = static_cast<float>(overlaySize.cy);
     const float panelX = g_performanceOverlayExternalRendering
         ? 0.0f
         : std::max(static_cast<float>(kSidebarWidth + 12), static_cast<float>(width) - panelWidth - 20.0f);
     const float panelY = g_performanceOverlayExternalRendering ? 0.0f : static_cast<float>(kHeaderHeight + 12);
     const RectF panel(panelX, panelY, panelWidth, panelHeight);
-    // The same panel is rendered in a separate layered window.  Its alpha is
-    // deliberately below opaque so a game remains visible underneath it.
-    fillRound(graphics, panel, 15, lightTheme() ? Color(168, 255, 255, 255) : Color(168, 19, 24, 36));
-    strokeRound(graphics, panel, 15, accentColor(175), 1.0f);
-    SolidBrush live(accentColor());
-    graphics.FillEllipse(&live, RectF(panel.X + 15, panel.Y + 15, 7, 7));
-    text(graphics, localized(L"PERFORMANCES", L"PERFORMANCE", L"LEISTUNG", L"性能"),
-         RectF(panel.X + 29, panel.Y + 8, panel.Width - 45, 20), 9, primaryTextColor(), FontStyleBold);
-    text(graphics, localized(L"en direct", L"live", L"live", L"实时"),
-         RectF(panel.X + panel.Width - 58, panel.Y + 8, 43, 20), 7.5f, accentTint(0.45),
-         FontStyleBold, StringAlignmentFar, StringAlignmentCenter);
-
     if (metrics.empty()) {
-        text(graphics, localized(L"Aucune métrique sélectionnée", L"No metrics selected", L"Keine Metrik ausgewählt", L"未选择指标"),
-             RectF(panel.X + 15, panel.Y + 33, panel.Width - 30, 18), 8.5f, secondaryTextColor());
+        const std::wstring empty = localized(L"Aucune métrique", L"No metrics", L"Keine Messwerte", L"无指标");
+        text(graphics, empty, RectF(panel.X + 6, panel.Y + 6, panel.Width - 12, 20), 10,
+             Color(210, 0, 0, 0), FontStyleBold);
+        text(graphics, empty, RectF(panel.X + 5, panel.Y + 5, panel.Width - 12, 20), 10,
+             Color(255, 245, 247, 252), FontStyleBold);
         return;
     }
     for (std::size_t index = 0; index < metrics.size(); ++index) {
         const Metric& metric = metrics[index];
-        const float rowY = panel.Y + 32.0f + static_cast<float>(index) * 21.0f;
-        text(graphics, metric.label, RectF(panel.X + 15, rowY, 72, 18), 8.5f,
-             secondaryTextColor(), FontStyleBold);
-        text(graphics, metric.value, RectF(panel.X + 82, rowY, panel.Width - 97, 18), 8.5f,
-             metric.warning ? Color(255, 255, 177, 104) : primaryTextColor(), FontStyleBold,
+        const float rowY = panel.Y + 5.0f + static_cast<float>(index) * 24.0f;
+        const RectF labelShadow(panel.X + 6, rowY + 1, 75, 20);
+        const RectF valueShadow(panel.X + 83, rowY + 1, panel.Width - 89, 20);
+        text(graphics, metric.label, labelShadow, 10, Color(220, 0, 0, 0), FontStyleBold);
+        text(graphics, metric.value, valueShadow, 10, Color(220, 0, 0, 0), FontStyleBold,
+             StringAlignmentFar, StringAlignmentCenter);
+        text(graphics, metric.label, RectF(labelShadow.X - 1, labelShadow.Y - 1, labelShadow.Width, labelShadow.Height), 10,
+             Color(255, 210, 218, 234), FontStyleBold);
+        text(graphics, metric.value, RectF(valueShadow.X - 1, valueShadow.Y - 1, valueShadow.Width, valueShadow.Height), 10,
+             metric.warning ? Color(255, 255, 177, 104) : Color(255, 250, 251, 255), FontStyleBold,
              StringAlignmentFar, StringAlignmentCenter);
     }
 }
@@ -10018,9 +10066,66 @@ void drawPerformanceOverlay(Graphics& graphics, int width, int /*height*/) {
 LRESULT CALLBACK performanceOverlayWindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
         case WM_NCHITTEST:
-            return HTTRANSPARENT;
+            return g_performancePositionEdit ? HTCLIENT : HTTRANSPARENT;
         case WM_MOUSEACTIVATE:
             return MA_NOACTIVATE;
+        case WM_SETCURSOR:
+            if (g_performancePositionEdit) {
+                SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
+                return TRUE;
+            }
+            break;
+        case WM_LBUTTONDOWN:
+            if (g_performancePositionEdit) {
+                RECT current{};
+                GetCursorPos(&g_performanceDragCursor);
+                GetWindowRect(window, &current);
+                g_performanceDragWindow = POINT{current.left, current.top};
+                g_performanceOverlayDragging = true;
+                SetCapture(window);
+                return 0;
+            }
+            break;
+        case WM_MOUSEMOVE:
+            if (g_performancePositionEdit && g_performanceOverlayDragging) {
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                RECT current{};
+                GetWindowRect(window, &current);
+                const int overlayWidth = current.right - current.left;
+                const int overlayHeight = current.bottom - current.top;
+                HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO info{};
+                info.cbSize = sizeof(info);
+                if (monitor && GetMonitorInfoW(monitor, &info)) {
+                    const int availableWidth = std::max(1, static_cast<int>(info.rcMonitor.right - info.rcMonitor.left) - overlayWidth);
+                    const int availableHeight = std::max(1, static_cast<int>(info.rcMonitor.bottom - info.rcMonitor.top) - overlayHeight);
+                    const int left = std::clamp(g_performanceDragWindow.x + cursor.x - g_performanceDragCursor.x,
+                                                info.rcMonitor.left, info.rcMonitor.left + availableWidth);
+                    const int top = std::clamp(g_performanceDragWindow.y + cursor.y - g_performanceDragCursor.y,
+                                               info.rcMonitor.top, info.rcMonitor.top + availableHeight);
+                    g_performancePositionX = std::clamp(static_cast<int>(std::lround(
+                        (left - info.rcMonitor.left) * 10000.0 / availableWidth)), 0, 10000);
+                    g_performancePositionY = std::clamp(static_cast<int>(std::lround(
+                        (top - info.rcMonitor.top) * 10000.0 / availableHeight)), 0, 10000);
+                    SetWindowPos(window, HWND_TOPMOST, left, top, 0, 0,
+                                 SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                }
+                return 0;
+            }
+            break;
+        case WM_LBUTTONUP:
+            if (g_performanceOverlayDragging) {
+                g_performanceOverlayDragging = false;
+                ReleaseCapture();
+                saveAutomationSettings();
+                if (g_window) InvalidateRect(g_window, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        case WM_CAPTURECHANGED:
+            g_performanceOverlayDragging = false;
+            break;
         case WM_ERASEBKGND:
             return 1;
         case WM_DISPLAYCHANGE:
@@ -10029,6 +10134,7 @@ LRESULT CALLBACK performanceOverlayWindowProcedure(HWND window, UINT message, WP
         default:
             return DefWindowProcW(window, message, wParam, lParam);
     }
+    return DefWindowProcW(window, message, wParam, lParam);
 }
 
 bool ensurePerformanceOverlayWindow() {
@@ -10044,7 +10150,7 @@ bool ensurePerformanceOverlayWindow() {
         classRegistered = true;
     }
     g_performanceOverlayWindow = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        WS_EX_LAYERED | (g_performancePositionEdit ? 0 : WS_EX_TRANSPARENT) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         L"RGBCcontrolPerformanceOverlay", L"RGBCcontrol performance overlay", WS_POPUP,
         0, 0, 1, 1, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
     return g_performanceOverlayWindow != nullptr;
@@ -10057,19 +10163,32 @@ void updatePerformanceOverlayWindow() {
     }
     if (!ensurePerformanceOverlayWindow()) return;
 
+    LONG_PTR extendedStyle = GetWindowLongPtrW(g_performanceOverlayWindow, GWL_EXSTYLE);
+    const LONG_PTR desiredStyle = g_performancePositionEdit
+        ? (extendedStyle & ~static_cast<LONG_PTR>(WS_EX_TRANSPARENT))
+        : (extendedStyle | WS_EX_TRANSPARENT);
+    if (desiredStyle != extendedStyle) {
+        SetWindowLongPtrW(g_performanceOverlayWindow, GWL_EXSTYLE, desiredStyle);
+        SetWindowPos(g_performanceOverlayWindow, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+
     HWND foreground = GetForegroundWindow();
     if (!foreground || foreground == g_performanceOverlayWindow) foreground = g_window;
-    HMONITOR monitor = MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
+    HMONITOR monitor = g_performancePositionEdit
+        ? MonitorFromWindow(g_performanceOverlayWindow, MONITOR_DEFAULTTONEAREST)
+        : MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
     MONITORINFO monitorInfo{};
     monitorInfo.cbSize = sizeof(MONITORINFO);
     if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo)) return;
     const RECT bounds = monitorInfo.rcMonitor;
-    constexpr int overlayWidth = 232;
-    constexpr int overlayHeight = 180;
-    const int left = bounds.right - overlayWidth - 20;
-    const int top = bounds.top + kHeaderHeight + 12;
-    const int width = overlayWidth;
-    const int height = overlayHeight;
+    const SIZE overlaySize = performanceOverlaySize();
+    const int width = overlaySize.cx;
+    const int height = overlaySize.cy;
+    const int availableWidth = std::max(1, static_cast<int>(bounds.right - bounds.left) - width);
+    const int availableHeight = std::max(1, static_cast<int>(bounds.bottom - bounds.top) - height);
+    const int left = bounds.left + static_cast<int>(std::lround(availableWidth * g_performancePositionX / 10000.0));
+    const int top = bounds.top + static_cast<int>(std::lround(availableHeight * g_performancePositionY / 10000.0));
 
     BITMAPINFO bitmapInfo{};
     bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
@@ -10842,8 +10961,14 @@ int createInterfaceCaptures(const fs::path& destination) {
     g_performanceShowMemory = true;
     g_performanceShowFans = true;
     g_uiFps = 60.0;
-    ok = savePageCapture(Page::Dashboard, 1180, 760, destination / L"performance-overlay.png") && ok;
-    ok = savePageCapture(Page::Dashboard, 1020, 680, destination / L"performance-overlay-small.png") && ok;
+    g_performancePositionX = 6700;
+    g_performancePositionY = 2200;
+    g_performancePositionEdit = true;
+    ok = savePageCapture(Page::Settings, 1180, 760, destination / L"performance-overlay.png", 1080.0f) && ok;
+    ok = savePageCapture(Page::Settings, 1020, 680, destination / L"performance-overlay-small.png", 1080.0f) && ok;
+    g_performancePositionEdit = false;
+    g_performancePositionX = 10000;
+    g_performancePositionY = 0;
     g_performanceOverlayEnabled = false;
     ok = savePageCapture(Page::Sessions, 1180, 760, destination / L"pc-sessions.png") && ok;
     g_pcSession = PcSession::Gaming;
@@ -11736,6 +11861,11 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             break;
         case Action::TogglePerformanceOverlay:
             g_performanceOverlayEnabled = !g_performanceOverlayEnabled;
+            if (!g_performanceOverlayEnabled) {
+                g_performancePositionEdit = false;
+                g_performanceOverlayDragging = false;
+                if (GetCapture() == g_performanceOverlayWindow) ReleaseCapture();
+            }
             g_lastPerformanceInvalidateAt = 0;
             saveAutomationSettings();
             updatePerformanceOverlayWindow();
@@ -11765,6 +11895,29 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             saveAutomationSettings();
             updatePerformanceOverlayWindow();
             break;
+        case Action::TogglePerformancePositionEdit:
+            g_performancePositionEdit = !g_performancePositionEdit;
+            if (g_performancePositionEdit) g_performanceOverlayEnabled = true;
+            else {
+                g_performanceOverlayDragging = false;
+                if (GetCapture() == g_performanceOverlayWindow) ReleaseCapture();
+            }
+            g_lastPerformanceInvalidateAt = 0;
+            saveAutomationSettings();
+            updatePerformanceOverlayWindow();
+            break;
+        case Action::SelectPerformancePosition: {
+            const int presetX[] = {0, 10000, 5000, 0, 10000};
+            const int presetY[] = {0, 0, 5000, 10000, 10000};
+            if (hit.index >= 0 && hit.index < 5) {
+                g_performancePositionX = presetX[hit.index];
+                g_performancePositionY = presetY[hit.index];
+                g_performanceOverlayEnabled = true;
+                saveAutomationSettings();
+                updatePerformanceOverlayWindow();
+            }
+            break;
+        }
         case Action::ClearTelemetry:
             g_telemetry.clear();
             saveTelemetryHistory();
@@ -11851,6 +12004,10 @@ void handleAction(const HitTarget& hit, float mouseX, float mouseY) {
             g_performanceShowGpu = true;
             g_performanceShowMemory = true;
             g_performanceShowFans = true;
+            g_performancePositionEdit = false;
+            g_performanceOverlayDragging = false;
+            g_performancePositionX = 10000;
+            g_performancePositionY = 0;
             g_gamepadPageCache.reset();
             applyWindowChromeTheme();
             refreshGlobalHotkeys();

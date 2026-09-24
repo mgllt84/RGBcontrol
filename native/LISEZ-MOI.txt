@@ -1,5 +1,13 @@
-RGBCcontrol 0.20.1 — application native C++ pour Windows
+RGBCcontrol 0.20.2 — application native C++ pour Windows
 =====================================================
+
+Performances sans cadre 0.20.2
+------------------------------
+La superposition de performances n'affiche plus de panneau : seules les
+valeurs choisies sont dessinées au-dessus du jeu avec une légère ombre pour
+rester lisibles. Cinq positions rapides sont proposées et le mode Déplacer
+librement permet de glisser les statistiques exactement où on le souhaite.
+La position est mémorisée et reproduite proportionnellement sur l'écran actif.
 
 Interface réorganisée 0.20.1
 ----------------------------

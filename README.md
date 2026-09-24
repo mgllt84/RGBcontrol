@@ -2,7 +2,7 @@
 
 Application Windows de contrôle RGB, de gestion des effets lumineux et de surveillance matérielle.
 
-Version actuelle : **0.20.1**.
+Version actuelle : **0.20.2**.
 
 - Contrôle RGB individuel et effets animés via OpenRGB et les plugins RGBCcontrol.
 - Détection matérielle, surveillance et profils de ventilation.
@@ -18,7 +18,7 @@ Version actuelle : **0.20.1**.
 - Sessions PC Jeu, Travail, Streaming et Nuit avec alimentation, ventilation, priorité des applications et manette.
 - Lancement groupé d'applications, suivi RAM/températures et restauration automatique à la fermeture de l'application principale.
 - Accès sûr aux réglages Windows du son, du microphone, des notifications et du mode Jeu.
-- Superposition de performances optionnelle et transparente sur l'écran : FPS, CPU, GPU, RAM et ventilateurs sélectionnables séparément.
+- Performances en texte flottant sans cadre : FPS, CPU, GPU, RAM et ventilateurs sélectionnables, cinq positions rapides et déplacement libre mémorisé.
 - Mixeur audio par application : volume principal, volume indépendant, sourdine et détection automatique des applications qui produisent du son.
 - Navigation simplifiée en huit rubriques, avec Profils/Sessions/Pilote auto regroupés sous Automatisation et Diagnostic/Paramètres sous Réglages.
 
